@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/address.hpp"
+#include "memory/address.hpp"
 
 #include <cstddef>
 #include <cstdint>

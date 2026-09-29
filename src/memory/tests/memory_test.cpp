@@ -1,4 +1,4 @@
-#include "core/memory.hpp"
+#include "memory/memory.hpp"
 
 #include <gtest/gtest.h>
 
