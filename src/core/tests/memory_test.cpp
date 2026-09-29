@@ -6,17 +6,15 @@
 #include <stdexcept>
 #include <type_traits>
 
-namespace
+namespace psp
 {
-
-using psp::GuestAddress;
 
 static_assert(!std::is_convertible_v<std::uint32_t, GuestAddress>);
 static_assert(!std::is_convertible_v<GuestAddress, std::uint32_t>);
 
 TEST(MemoryTest, ReadsAndWritesLittleEndianValues)
 {
-    psp::Memory memory(GuestAddress{0x08800000}, 8);
+    Memory memory(GuestAddress{0x08800000}, 8);
     EXPECT_EQ(memory.read_u32(GuestAddress{0x08800000}), 0U);
     memory.write_u32(GuestAddress{0x08800000}, 0x12345678);
 
@@ -31,7 +29,7 @@ TEST(MemoryTest, ReadsAndWritesLittleEndianValues)
 
 TEST(MemoryTest, SupportsUnalignedAccess)
 {
-    psp::Memory memory(GuestAddress{0x08800000}, 8);
+    Memory memory(GuestAddress{0x08800000}, 8);
     memory.write_u32(GuestAddress{0x08800001}, 0x12345678);
 
     EXPECT_EQ(memory.read_u32(GuestAddress{0x08800001}), 0x12345678U);
@@ -40,7 +38,7 @@ TEST(MemoryTest, SupportsUnalignedAccess)
 
 TEST(MemoryTest, AllowsLastByteAndRejectsCrossBoundaryAccess)
 {
-    psp::Memory memory(GuestAddress{0x08800000}, 4);
+    Memory memory(GuestAddress{0x08800000}, 4);
     memory.write_u8(GuestAddress{0x08800003}, 0xA5);
     EXPECT_EQ(memory.read_u8(GuestAddress{0x08800003}), 0xA5);
 
@@ -52,15 +50,15 @@ TEST(MemoryTest, AllowsLastByteAndRejectsCrossBoundaryAccess)
 
 TEST(MemoryTest, AcceptsRegionEndingAtLastAddress)
 {
-    psp::Memory memory(GuestAddress{0xFFFFFFFE}, 2);
+    Memory memory(GuestAddress{0xFFFFFFFE}, 2);
     memory.write_u16(GuestAddress{0xFFFFFFFE}, 0x1234);
     EXPECT_EQ(memory.read_u8(GuestAddress{0xFFFFFFFF}), 0x12);
 }
 
 TEST(MemoryTest, RejectsInvalidRegions)
 {
-    EXPECT_THROW(psp::Memory(GuestAddress{0}, 0), std::invalid_argument);
-    EXPECT_THROW(psp::Memory(GuestAddress{0xFFFFFFFF}, 2), std::invalid_argument);
+    EXPECT_THROW(Memory(GuestAddress{0}, 0), std::invalid_argument);
+    EXPECT_THROW(Memory(GuestAddress{0xFFFFFFFF}, 2), std::invalid_argument);
 }
 
-} // namespace
+} // namespace psp
