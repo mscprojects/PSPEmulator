@@ -1,0 +1,3 @@
+[submodule "tests/pspautotests"]
+	path = tests/pspautotests
+	url = https://github.com/hrydgard/pspautotests.git
