@@ -1,3 +1,6 @@
 [submodule "third_party/pspautotests"]
 	path = third_party/pspautotests
 	url = https://github.com/hrydgard/pspautotests.git
+[submodule "third_party/strong_type"]
+	path = third_party/strong_type
+	url = https://github.com/rollbear/strong_type.git

@@ -10,6 +10,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(PSPEMU_ENABLE_SANITIZERS "Enable address and undefined behavior sanitizers" OFF)
 
 find_package(fmt CONFIG REQUIRED)
+add_subdirectory(third_party/strong_type)
 
 add_library(project_options INTERFACE)
 
@@ -29,7 +30,7 @@ endif()
 
 add_library(psp_core src/core/memory.cpp)
 target_include_directories(psp_core PUBLIC src)
-target_link_libraries(psp_core PUBLIC project_options)
+target_link_libraries(psp_core PUBLIC project_options strong_type::strong_type)
 
 add_executable(pspemu src/main.cpp)
 target_link_libraries(pspemu PRIVATE psp_core fmt::fmt)

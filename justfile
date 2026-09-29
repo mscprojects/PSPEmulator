@@ -11,6 +11,11 @@ build: configure
 test: build
     ctest --test-dir build --output-on-failure --no-tests=error
 
+clang-test:
+    cmake -S . -B build-clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug
+    cmake --build build-clang --parallel
+    ctest --test-dir build-clang --output-on-failure --no-tests=error
+
 format:
     find src -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) -print0 | xargs -0 -r clang-format -i
 
@@ -18,7 +23,7 @@ format-check:
     find src -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) -print0 | xargs -0 -r clang-format --dry-run --Werror
 
 tidy: configure
-    find src -type f -name '*.cpp' -print0 | xargs -0 -r clang-tidy -p build --warnings-as-errors='*'
+    find src -type f -name '*.cpp' -print0 | xargs -0 -r clang-tidy -p build --warnings-as-errors='*' --header-filter='^{{justfile_directory()}}/src/'
 
 sanitizers:
     cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Debug -DPSPEMU_ENABLE_SANITIZERS=ON
@@ -28,5 +33,6 @@ sanitizers:
 ci:
     just format-check
     just test
+    just clang-test
     just tidy
     just sanitizers
