@@ -18,32 +18,32 @@ Memory::Memory(GuestAddress base_address, std::size_t size) : base_address_(base
 
 std::uint8_t Memory::read_u8(GuestAddress address) const
 {
-    return static_cast<std::uint8_t>(read_le(address, AccessWidth::Byte));
+    return static_cast<std::uint8_t>(read_le(address, 1));
 }
 
 std::uint16_t Memory::read_u16(GuestAddress address) const
 {
-    return static_cast<std::uint16_t>(read_le(address, AccessWidth::Halfword));
+    return static_cast<std::uint16_t>(read_le(address, 2));
 }
 
 std::uint32_t Memory::read_u32(GuestAddress address) const
 {
-    return read_le(address, AccessWidth::Word);
+    return read_le(address, 4);
 }
 
 void Memory::write_u8(GuestAddress address, std::uint8_t value)
 {
-    write_le(address, value, AccessWidth::Byte);
+    write_le(address, value, 1);
 }
 
 void Memory::write_u16(GuestAddress address, std::uint16_t value)
 {
-    write_le(address, value, AccessWidth::Halfword);
+    write_le(address, value, 2);
 }
 
 void Memory::write_u32(GuestAddress address, std::uint32_t value)
 {
-    write_le(address, value, AccessWidth::Word);
+    write_le(address, value, 4);
 }
 
 std::size_t Memory::checked_offset(GuestAddress address, std::size_t width) const
@@ -60,9 +60,8 @@ std::size_t Memory::checked_offset(GuestAddress address, std::size_t width) cons
     return offset;
 }
 
-std::uint32_t Memory::read_le(GuestAddress address, AccessWidth access_width) const
+std::uint32_t Memory::read_le(GuestAddress address, std::size_t width) const
 {
-    const auto width = static_cast<std::size_t>(access_width);
     const auto offset = checked_offset(address, width);
     std::uint32_t value = 0;
     for (std::size_t index = 0; index < width; ++index)
@@ -72,9 +71,10 @@ std::uint32_t Memory::read_le(GuestAddress address, AccessWidth access_width) co
     return value;
 }
 
-void Memory::write_le(GuestAddress address, std::uint32_t value, AccessWidth access_width)
+// The width is fixed at each private call site, and this order matches the public write methods.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+void Memory::write_le(GuestAddress address, std::uint32_t value, std::size_t width)
 {
-    const auto width = static_cast<std::size_t>(access_width);
     const auto offset = checked_offset(address, width);
     for (std::size_t index = 0; index < width; ++index)
     {

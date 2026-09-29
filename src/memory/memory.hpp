@@ -23,16 +23,9 @@ public:
     void write_u32(GuestAddress address, std::uint32_t value);
 
 private:
-    enum class AccessWidth : std::uint8_t
-    {
-        Byte = 1,
-        Halfword = 2,
-        Word = 4,
-    };
-
     std::size_t checked_offset(GuestAddress address, std::size_t width) const;
-    std::uint32_t read_le(GuestAddress address, AccessWidth width) const;
-    void write_le(GuestAddress address, std::uint32_t value, AccessWidth width);
+    std::uint32_t read_le(GuestAddress address, std::size_t width) const;
+    void write_le(GuestAddress address, std::uint32_t value, std::size_t width);
 
     GuestAddress base_address_;
     std::vector<std::uint8_t> bytes_;
