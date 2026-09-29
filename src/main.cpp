@@ -1,7 +1,9 @@
-#include <iostream>
+#include <fmt/core.h>
+
+#include <cstdio>
 
 int main()
 {
-    std::cerr << "PSP emulator is not implemented yet.\n";
+    fmt::print(stderr, "PSP emulator is not implemented yet.\n");
     return 1;
 }
