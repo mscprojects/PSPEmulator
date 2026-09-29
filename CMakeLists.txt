@@ -28,7 +28,7 @@ if(PSPEMU_ENABLE_SANITIZERS)
     target_link_options(project_options INTERFACE -fsanitize=address,undefined)
 endif()
 
-add_library(psp_core src/memory/memory.cpp)
+add_library(psp_core src/cpu/cpu.cpp src/memory/memory.cpp)
 target_include_directories(psp_core PUBLIC src)
 target_link_libraries(psp_core PUBLIC project_options strong_type::strong_type)
 
@@ -43,4 +43,8 @@ if(BUILD_TESTING)
     add_executable(memory_test src/memory/tests/memory_test.cpp)
     target_link_libraries(memory_test PRIVATE psp_core GTest::gtest_main)
     gtest_discover_tests(memory_test)
+
+    add_executable(cpu_test src/cpu/tests/cpu_test.cpp)
+    target_link_libraries(cpu_test PRIVATE psp_core GTest::gtest_main)
+    gtest_discover_tests(cpu_test)
 endif()
