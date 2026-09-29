@@ -12,13 +12,13 @@ test: build
     ctest --test-dir build --output-on-failure --no-tests=error
 
 format:
-    find src tests -path tests/pspautotests -prune -o -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) -print0 | xargs -0 -r clang-format -i
+    find src -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) -print0 | xargs -0 -r clang-format -i
 
 format-check:
-    find src tests -path tests/pspautotests -prune -o -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) -print0 | xargs -0 -r clang-format --dry-run --Werror
+    find src -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) -print0 | xargs -0 -r clang-format --dry-run --Werror
 
 tidy: configure
-    find src tests -path tests/pspautotests -prune -o -type f -name '*.cpp' -print0 | xargs -0 -r clang-tidy -p build --warnings-as-errors='*'
+    find src -type f -name '*.cpp' -print0 | xargs -0 -r clang-tidy -p build --warnings-as-errors='*'
 
 sanitizers:
     cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Debug -DPSPEMU_ENABLE_SANITIZERS=ON

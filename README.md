@@ -19,8 +19,8 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --parallel
 ```
 
-`just format` formats project C++ files with `clang-format`. `just ci` checks formatting, builds and runs the tests, runs clang-tidy, then builds and tests with address and undefined behavior sanitizers. Formatting and analysis leave the upstream test submodule untouched.
+`just format` formats C++ files under `src/` with `clang-format`. `just ci` checks formatting, builds and runs the tests, runs clang-tidy, then builds and tests with address and undefined behavior sanitizers.
 
 The first core component is a single contiguous `psp::Memory` region. It starts zeroed, reads and writes 8-, 16-, and 32-bit values in little-endian order, permits unaligned access, and throws `std::out_of_range` when an access crosses its boundaries. The CPU will later decide which accesses require alignment checks.
 
-The upstream PSP tests live in `tests/pspautotests`. After cloning, initialize them with `git submodule update --init --recursive`.
+Project tests live beside the code they cover, under each component's `tests/` directory. The upstream PSP tests live in `third_party/pspautotests`. After cloning, initialize them with `git submodule update --init --recursive`.

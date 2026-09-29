@@ -39,7 +39,7 @@ if(BUILD_TESTING)
     find_package(GTest CONFIG REQUIRED)
     include(GoogleTest)
 
-    add_executable(memory_test tests/memory_test.cpp)
+    add_executable(memory_test src/core/tests/memory_test.cpp)
     target_link_libraries(memory_test PRIVATE psp_core GTest::gtest_main)
     gtest_discover_tests(memory_test)
 endif()
