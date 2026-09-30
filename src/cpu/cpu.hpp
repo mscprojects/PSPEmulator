@@ -23,6 +23,7 @@ public:
 private:
     void execute(std::uint32_t instruction);
     void execute_special(std::uint32_t instruction);
+    GuestAddress word_address(std::uint32_t instruction) const;
     void write_register(std::size_t index, std::uint32_t value);
 
     Memory &memory_;

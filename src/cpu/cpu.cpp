@@ -67,23 +67,11 @@ void Cpu::execute(std::uint32_t instruction)
         write_register(target, static_cast<std::uint32_t>(immediate) << 16);
         break;
     case 0x23: // LW
-    case 0x2B: // SW
-    {
-        const auto address = registers_[source] + static_cast<std::uint32_t>(signed_immediate);
-        if ((address & 3U) != 0)
-        {
-            throw std::invalid_argument("Word address must be aligned");
-        }
-        if (opcode == 0x23)
-        {
-            write_register(target, memory_.read_u32(GuestAddress{address}));
-        }
-        else
-        {
-            memory_.write_u32(GuestAddress{address}, registers_[target]);
-        }
+        write_register(target, memory_.read_u32(word_address(instruction)));
         break;
-    }
+    case 0x2B: // SW
+        memory_.write_u32(word_address(instruction), registers_[target]);
+        break;
     default:
         throw std::runtime_error("Unsupported Allegrex instruction");
     }
@@ -136,6 +124,19 @@ void Cpu::execute_special(std::uint32_t instruction)
     default:
         throw std::runtime_error("Unsupported Allegrex instruction");
     }
+}
+
+GuestAddress Cpu::word_address(std::uint32_t instruction) const
+{
+    const auto source = (instruction >> 21) & 0b11111U; // rs: bits 25-21
+    const auto immediate = static_cast<std::uint16_t>(instruction);
+    const auto signed_immediate = static_cast<std::int32_t>(std::bit_cast<std::int16_t>(immediate));
+    const auto address = registers_[source] + static_cast<std::uint32_t>(signed_immediate);
+    if ((address & 3U) != 0)
+    {
+        throw std::invalid_argument("Word address must be aligned");
+    }
+    return GuestAddress{address};
 }
 
 void Cpu::write_register(std::size_t index, std::uint32_t value)
