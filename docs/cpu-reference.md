@@ -11,6 +11,26 @@ Use the MIPS instruction manual for baseline instruction semantics, Allegrex-spe
 
 Links were checked on 2026-09-30. This guide contains project notes and links; it does not include copies of the upstream manuals or source code. When recording a behavior discovered in upstream code, link the exact commit and add a focused test here.
 
+## Instruction formats
+
+Instructions are 32-bit words. Bit 31 is the most significant bit; bit 0 is the least significant. `Memory::read_u32` assembles the little-endian bytes into that word before decoding.
+
+The common integer layouts are:
+
+```text
+R: opcode[31:26] rs[25:21] rt[20:16] rd[15:11] shamt[10:6] funct[5:0]
+I: opcode[31:26] rs[25:21] rt[20:16] immediate[15:0]
+J: opcode[31:26] target[25:0]
+```
+
+`rs`, `rt`, and `rd` are five-bit register fields, selecting registers 0 through 31. Their roles depend on the instruction: `ADDU` reads `rs` and `rt` and writes `rd`; `ADDIU` reads `rs` and writes `rt`; `SW` uses `rs` as the address base and reads `rt` as the value to store. `shamt` is the fixed shift amount.
+
+The six-bit primary opcode can identify an operation or a decoding group. Opcode zero is the MIPS `SPECIAL` group, where `funct` selects operations such as `SLL`, `ADDU`, and `JR`. Other groups can use additional fields to select the operation. Floating-point and VFPU instructions need their own layouts.
+
+For example, `0x2409FFFF` encodes `ADDIU $t1, $zero, -1`: opcode `0x09`, `rs = 0`, `rt = 9`, and immediate `0xFFFF`. Arithmetic and comparison immediates are sign-extended, including `SLTIU`; the logical immediates in `ANDI`, `ORI`, and `XORI` are zero-extended. `LUI` places its immediate in the upper half of the result.
+
+These layouts follow the MIPS manual and PRXTool encodings linked above. Check Allegrex-specific encodings before adding instructions.
+
 ## Verification in this repository
 
 - [cpu_alu source](../third_party/pspautotests/tests/cpu/cpu_alu/cpu_alu.c) and [expected output](../third_party/pspautotests/tests/cpu/cpu_alu/cpu_alu.expected) define the next executable-test target.

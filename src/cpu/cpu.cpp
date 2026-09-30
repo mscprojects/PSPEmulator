@@ -34,6 +34,11 @@ std::uint32_t Cpu::register_value(std::size_t index) const
 
 void Cpu::execute(std::uint32_t instruction)
 {
+    // Common 32-bit layouts, from most significant to least significant bit:
+    // R: opcode[6] | rs[5] | rt[5] | rd[5] | shamt[5] | funct[6]
+    // I: opcode[6] | rs[5] | rt[5] | immediate[16]
+    // J: opcode[6] | target[26]
+    // Brackets give field widths. See docs/cpu-reference.md for operand meanings.
     const auto source = (instruction >> 21) & 0b11111U; // rs: bits 25-21
     const auto target = (instruction >> 16) & 0b11111U; // rt: bits 20-16
     const auto immediate = static_cast<std::uint16_t>(instruction);
@@ -42,19 +47,22 @@ void Cpu::execute(std::uint32_t instruction)
 
     switch (opcode)
     {
-    case 0x00: // SPECIAL
+    case 0x00: // SPECIAL: the low six function bits select the operation.
         execute_special(instruction);
         break;
     case 0x09: // ADDIU
+        // The immediate is sign-extended; unsigned addition wraps without an overflow trap.
         write_register(target, registers_[source] + static_cast<std::uint32_t>(signed_immediate));
         break;
     case 0x0A: // SLTI
         write_register(target, std::bit_cast<std::int32_t>(registers_[source]) < signed_immediate);
         break;
     case 0x0B: // SLTIU
+        // Even for an unsigned comparison, the immediate is sign-extended first.
         write_register(target, registers_[source] < static_cast<std::uint32_t>(signed_immediate));
         break;
     case 0x0C: // ANDI
+        // Logical immediates (ANDI, ORI, XORI) are zero-extended instead.
         write_register(target, registers_[source] & immediate);
         break;
     case 0x0D: // ORI
@@ -131,6 +139,7 @@ GuestAddress Cpu::word_address(std::uint32_t instruction) const
     const auto source = (instruction >> 21) & 0b11111U; // rs: bits 25-21
     const auto immediate = static_cast<std::uint16_t>(instruction);
     const auto signed_immediate = static_cast<std::int32_t>(std::bit_cast<std::int16_t>(immediate));
+    // The offset is signed, but address arithmetic wraps modulo 2^32.
     const auto address = registers_[source] + static_cast<std::uint32_t>(signed_immediate);
     if ((address & 3U) != 0)
     {
@@ -141,6 +150,7 @@ GuestAddress Cpu::word_address(std::uint32_t instruction) const
 
 void Cpu::write_register(std::size_t index, std::uint32_t value)
 {
+    // Register zero is hardwired to zero; writes to it are discarded.
     if (index != 0)
     {
         registers_[index] = value;
