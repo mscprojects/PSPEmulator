@@ -49,4 +49,12 @@ Branch offsets count words relative to `PC + 4`; `J` and `JAL` combine their 26-
 
 [CPU tests](../src/cpu/tests/cpu_test.cpp) cover taken and untaken conditions for every integer branch variant, signed boundaries, a backward loop, function calls and returns, `JALR` register aliasing, jump region boundaries, skipped invalid delay slots, and retry after a failed delay slot. The [PPSSPP interpreter](https://github.com/hrydgard/ppsspp/blob/master/Core/MIPS/Interpreter.cpp) is a cross-check for branch and link behavior.
 
-Extract instruction-field accessors only when they remove duplication or gain another caller. A shared decoder becomes useful when tracing or disassembly needs the same instruction identification. Add HI/LO state with the multiply/divide instructions that need it.
+## Integer ALU support for cpu_alu
+
+The interpreter implements the integer operations exercised by `cpu_alu.c`: basic arithmetic and logic, comparisons, fixed and variable shifts, rotations, `SEB`, `SEH`, `BITREV`, `MIN`, `MAX`, `CLZ`, `CLO`, `WSBH`, `WSBW`, `EXT`, `INS`, and HI/LO multiply, divide, and multiply-accumulate operations. `MOVZ`, `MOVN`, and `SRLV` are also implemented for compiled integer code.
+
+HI and LO start at zero and are accessible through `MFHI`, `MFLO`, `MTHI`, and `MTLO`. Products and accumulations preserve the 64-bit result modulo 2^64, including signed multiplication. Signed division truncates toward zero. Division-by-zero and signed overflow results follow the bundled [cpu_div hardware expectations](../third_party/pspautotests/tests/cpu/cpu_alu/cpu_div.expected); notably, unsigned division by zero gives a quotient of `0xFFFF` when the numerator fits in 16 bits, otherwise `0xFFFFFFFF`.
+
+Tests cover each added instruction, boundary shift counts, signedness, full-width bitfields, register aliasing, HI/LO carry and wraparound, division edge cases, and writes to `$zero`. Invalid bitfield ranges and unsupported rotate selectors are rejected before advancing execution.
+
+This instruction support does not yet run the PRX end to end. Segment loading, relocations, import resolution, startup services, and output capture remain necessary. Other instruction families, including FPU and VFPU operations, remain unsupported.

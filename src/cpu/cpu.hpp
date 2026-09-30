@@ -34,17 +34,22 @@ public:
 private:
     void execute(std::uint32_t instruction, ControlFlow &flow);
     void execute_special(std::uint32_t instruction, ControlFlow &flow);
+    void execute_special3(std::uint32_t instruction);
     void execute_regimm(std::uint32_t instruction, ControlFlow &flow);
     GuestAddress branch_address(std::uint32_t instruction) const;
     void skip_delay_slot(ControlFlow &flow) const;
     GuestAddress jump_address(std::uint32_t instruction) const;
     GuestAddress word_address(std::uint32_t instruction) const;
+    std::uint64_t hi_lo_value() const;
+    void write_hi_lo(std::uint64_t value);
     void write_register(std::size_t index, std::uint32_t value);
 
     Memory &memory_;
     GuestAddress program_counter_;
     GuestAddress next_program_counter_;
     std::array<std::uint32_t, kRegisterCount> registers_{};
+    std::uint32_t high_register_{};
+    std::uint32_t low_register_{};
 };
 
 } // namespace psp

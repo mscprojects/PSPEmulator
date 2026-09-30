@@ -26,6 +26,21 @@ struct BranchCase
     std::array<bool, 4> taken;
 };
 
+struct AluInitialState
+{
+    std::uint32_t destination{};
+    std::uint64_t accumulator{};
+};
+
+struct AluResult
+{
+    std::uint32_t destination;
+    std::uint32_t target;
+    std::uint32_t high;
+    std::uint32_t low;
+    std::uint32_t zero;
+};
+
 void load_program(Memory &memory, std::initializer_list<std::uint32_t> instructions)
 {
     auto address = kProgramBase;
@@ -42,6 +57,29 @@ void step_n(Cpu &cpu, std::size_t count)
     {
         cpu.step();
     }
+}
+
+AluResult run_alu(std::uint32_t instruction, std::uint32_t left, std::uint32_t right, AluInitialState initial = {})
+{
+    Memory memory(GuestAddress{kProgramBase}, 64);
+    const auto low = static_cast<std::uint32_t>(initial.accumulator);
+    const auto high = static_cast<std::uint32_t>(initial.accumulator >> 32);
+    load_program(memory, {
+                             0x3C080000 | (left >> 16), 0x35080000 | (left & 0xFFFF), 0x3C090000 | (right >> 16),
+                             0x35290000 | (right & 0xFFFF), 0x3C0A0000 | (initial.destination >> 16),
+                             0x354A0000 | (initial.destination & 0xFFFF), 0x3C0B0000 | (low >> 16),
+                             0x356B0000 | (low & 0xFFFF), 0x3C0C0000 | (high >> 16), 0x358C0000 | (high & 0xFFFF),
+                             0x01600013, // mtlo $t3
+                             0x01800011, // mthi $t4
+                             instruction,
+                             0x00005810, // mfhi $t3
+                             0x00006012, // mflo $t4
+                         });
+    Cpu cpu(memory, GuestAddress{kProgramBase});
+    step_n(cpu, 15);
+    EXPECT_EQ(cpu.program_counter().value_of(), kProgramBase + 60);
+    return {cpu.register_value(10), cpu.register_value(9), cpu.register_value(11), cpu.register_value(12),
+            cpu.register_value(0)};
 }
 
 } // namespace
@@ -385,6 +423,262 @@ TEST(CpuTest, RejectsUnknownRegimmWithoutChangingControlFlow)
     memory.write_u32(GuestAddress{kProgramBase}, 0x00000000);
     step_n(cpu, 2);
     EXPECT_EQ(cpu.program_counter().value_of(), kProgramBase + 8);
+}
+
+TEST(CpuTest, ExecutesVariableShiftsAndRotationsWithMaskedCounts)
+{
+    struct ShiftCase
+    {
+        std::uint32_t count;
+        std::uint32_t left;
+        std::uint32_t right;
+        std::uint32_t arithmetic;
+        std::uint32_t rotate;
+    };
+    const ShiftCase cases[] = {
+        {0, 0x80000001, 0x80000001, 0x80000001, 0x80000001},
+        {1, 0x00000002, 0x40000000, 0xC0000000, 0xC0000000},
+        {31, 0x80000000, 0x00000001, 0xFFFFFFFF, 0x00000003},
+        {32, 0x80000001, 0x80000001, 0x80000001, 0x80000001},
+        {33, 0x00000002, 0x40000000, 0xC0000000, 0xC0000000},
+        {0xFFFFFFFF, 0x80000000, 0x00000001, 0xFFFFFFFF, 0x00000003},
+    };
+    for (const auto &test : cases)
+    {
+        SCOPED_TRACE(test.count);
+        EXPECT_EQ(run_alu(0x01095004, test.count, 0x80000001).destination, test.left);       // sllv
+        EXPECT_EQ(run_alu(0x01095006, test.count, 0x80000001).destination, test.right);      // srlv
+        EXPECT_EQ(run_alu(0x01095007, test.count, 0x80000001).destination, test.arithmetic); // srav
+        EXPECT_EQ(run_alu(0x01095046, test.count, 0x80000001).destination, test.rotate);     // rotrv
+    }
+    EXPECT_EQ(run_alu(0x00295002, 0, 0x80000001).destination, 0x80000001U); // rotr by 0
+    EXPECT_EQ(run_alu(0x00295102, 0, 0x12345678).destination, 0x81234567U); // rotr by 4
+    EXPECT_EQ(run_alu(0x002957C2, 0, 0x80000001).destination, 3U);          // rotr by 31
+    EXPECT_EQ(run_alu(0x01094846, 4, 0x12345678).target, 0x81234567U);      // rotrv with rt == rd
+}
+
+TEST(CpuTest, ConditionalMovesPreserveDestinationWhenConditionFails)
+{
+    EXPECT_EQ(run_alu(0x0109500A, 0x12345678, 0, {.destination = 7}).destination, 0x12345678U); // movz
+    EXPECT_EQ(run_alu(0x0109500A, 0x12345678, 1, {.destination = 7}).destination, 7U);
+    EXPECT_EQ(run_alu(0x0109500B, 0x12345678, 0, {.destination = 7}).destination, 7U); // movn
+    EXPECT_EQ(run_alu(0x0109500B, 0x12345678, 0x80000000, {.destination = 7}).destination, 0x12345678U);
+    EXPECT_EQ(run_alu(0x0109480B, 0x12345678, 1).target, 0x12345678U); // movn with rt == rd
+}
+
+TEST(CpuTest, ExecutesSignedMinAndMax)
+{
+    EXPECT_EQ(run_alu(0x0109502C, 0x80000000, 0x7FFFFFFF).destination, 0x7FFFFFFFU); // max
+    EXPECT_EQ(run_alu(0x0109502D, 0x80000000, 0x7FFFFFFF).destination, 0x80000000U); // min
+    EXPECT_EQ(run_alu(0x0109502C, 0xFFFFFFFF, 0).destination, 0U);
+    EXPECT_EQ(run_alu(0x0109502D, 0, 0xFFFFFFFF).destination, 0xFFFFFFFFU);
+    EXPECT_EQ(run_alu(0x0109502C, 7, 7).destination, 7U);
+    EXPECT_EQ(run_alu(0x0109502D, 7, 7).destination, 7U);
+}
+
+TEST(CpuTest, CountsLeadingBitsUsingAllegrexEncodings)
+{
+    EXPECT_EQ(run_alu(0x01005016, 0, 0).destination, 32U); // clz
+    EXPECT_EQ(run_alu(0x01005016, 1, 0).destination, 31U);
+    EXPECT_EQ(run_alu(0x01005016, 0x80000000, 0).destination, 0U);
+    EXPECT_EQ(run_alu(0x01005016, 0x00008000, 0).destination, 16U);
+    EXPECT_EQ(run_alu(0x01005017, 0xFFFFFFFF, 0).destination, 32U); // clo
+    EXPECT_EQ(run_alu(0x01005017, 0xFFFFFFFE, 0).destination, 31U);
+    EXPECT_EQ(run_alu(0x01005017, 0, 0).destination, 0U);
+    EXPECT_EQ(run_alu(0x01005017, 0xFFFF0000, 0).destination, 16U);
+}
+
+TEST(CpuTest, SignExtendsLowByteAndHalfword)
+{
+    EXPECT_EQ(run_alu(0x7C095420, 0, 0x12345681).destination, 0xFFFFFF81U); // seb
+    EXPECT_EQ(run_alu(0x7C095420, 0, 0xFFFFFF7F).destination, 0x7FU);
+    EXPECT_EQ(run_alu(0x7C095420, 0, 0x12345600).destination, 0U);
+    EXPECT_EQ(run_alu(0x7C095620, 0, 0x12348123).destination, 0xFFFF8123U); // seh
+    EXPECT_EQ(run_alu(0x7C095620, 0, 0xFFFF7FFF).destination, 0x7FFFU);
+    EXPECT_EQ(run_alu(0x7C095620, 0, 0xFFFF0000).destination, 0U);
+}
+
+TEST(CpuTest, SwapsBytesAndReversesBits)
+{
+    EXPECT_EQ(run_alu(0x7C0950A0, 0, 0x12345678).destination, 0x34127856U); // wsbh
+    EXPECT_EQ(run_alu(0x7C0950E0, 0, 0x12345678).destination, 0x78563412U); // wsbw
+    EXPECT_EQ(run_alu(0x7C095520, 0, 0).destination, 0U);                   // bitrev
+    EXPECT_EQ(run_alu(0x7C095520, 0, 0xFFFFFFFF).destination, 0xFFFFFFFFU);
+    EXPECT_EQ(run_alu(0x7C095520, 0, 1).destination, 0x80000000U);
+    EXPECT_EQ(run_alu(0x7C095520, 0, 0x80000000).destination, 1U);
+    EXPECT_EQ(run_alu(0x7C095520, 0, 0x12345678).destination, 0x1E6A2C48U);
+    EXPECT_EQ(run_alu(0x7C0948E0, 0, 0x12345678).target, 0x78563412U); // wsbw with rt == rd
+}
+
+TEST(CpuTest, ExtractsAndInsertsBitfieldsIncludingFullWord)
+{
+    EXPECT_EQ(run_alu(0x7D098180, 0xFEDCBA98, 0).target, 0x172EAU);    // ext $t1, $t0, 6, 17
+    EXPECT_EQ(run_alu(0x7D098104, 0xFFFFFFFF, 0).target, 0x0001FFF0U); // ins $t1, $t0, 4, 13
+    EXPECT_EQ(run_alu(0x7D098104, 0, 0xFFFFFFFF).target, 0xFFFE000FU);
+    EXPECT_EQ(run_alu(0x7D09F800, 0x12345678, 0).target, 0x12345678U);          // ext full word
+    EXPECT_EQ(run_alu(0x7D09F804, 0x12345678, 0xFFFFFFFF).target, 0x12345678U); // ins full word
+    EXPECT_EQ(run_alu(0x7D0907C0, 0x80000000, 0).target, 1U);                   // ext top bit
+    EXPECT_EQ(run_alu(0x7D09FFC4, 1, 0).target, 0x80000000U);                   // ins top bit
+    EXPECT_EQ(run_alu(0x7D298104, 0, 0x12345678).target, 0x12356788U);          // ins with rs == rt
+}
+
+TEST(CpuTest, MovesHiLoIndependentlyAndStartsThemAtZero)
+{
+    Memory memory(GuestAddress{kProgramBase}, 32);
+    load_program(memory, {0x00004010, 0x00004812}); // mfhi $t0; mflo $t1
+    Cpu cpu(memory, GuestAddress{kProgramBase});
+    step_n(cpu, 2);
+    EXPECT_EQ(cpu.register_value(8), 0U);
+    EXPECT_EQ(cpu.register_value(9), 0U);
+
+    const auto high = run_alu(0x01000011, 0x12345678, 0, {.accumulator = 0xABCDEF0198765432ULL}); // mthi
+    EXPECT_EQ(high.high, 0x12345678U);
+    EXPECT_EQ(high.low, 0x98765432U);
+    const auto low = run_alu(0x01000013, 0x12345678, 0, {.accumulator = 0xABCDEF0198765432ULL}); // mtlo
+    EXPECT_EQ(low.high, 0xABCDEF01U);
+    EXPECT_EQ(low.low, 0x12345678U);
+    EXPECT_EQ(run_alu(0x00005010, 0, 0, {.accumulator = 0xABCDEF0198765432ULL}).destination, 0xABCDEF01U); // mfhi
+    EXPECT_EQ(run_alu(0x00005012, 0, 0, {.accumulator = 0xABCDEF0198765432ULL}).destination, 0x98765432U); // mflo
+}
+
+TEST(CpuTest, MultipliesAndAccumulatesWithWrappingHiLo)
+{
+    struct MultiplyCase
+    {
+        std::uint32_t instruction;
+        std::uint32_t left;
+        std::uint32_t right;
+        std::uint64_t accumulator;
+        std::uint64_t expected;
+    };
+    const MultiplyCase cases[] = {
+        {0x01090018, 0xFFFFFFFF, 2, 7, 0xFFFFFFFFFFFFFFFEULL}, // mult: -1 * 2
+        {0x01090018, 0x80000000, 0x80000000, 7, 0x4000000000000000ULL},
+        {0x01090019, 0xFFFFFFFF, 2, 7, 0x00000001FFFFFFFEULL}, // multu
+        {0x01090019, 0xFFFFFFFF, 0xFFFFFFFF, 0, 0xFFFFFFFE00000001ULL},
+        {0x01090018, 0, 0xFFFFFFFF, 0xFFFFFFFFFFFFFFFFULL, 0},
+        {0x0109001C, 0xFFFFFFFF, 2, 1, 0xFFFFFFFFFFFFFFFFULL}, // madd
+        {0x0109001C, 1, 1, 0x7FFFFFFFFFFFFFFFULL, 0x8000000000000000ULL},
+        {0x0109001C, 1, 1, 0xFFFFFFFFFFFFFFFFULL, 0},
+        {0x0109001D, 0xFFFFFFFF, 2, 1, 0x00000001FFFFFFFFULL}, // maddu
+        {0x0109001D, 1, 1, 0x00000000FFFFFFFFULL, 0x0000000100000000ULL},
+        {0x0109001D, 1, 1, 0xFFFFFFFFFFFFFFFFULL, 0},
+        {0x0109002E, 0xFFFFFFFF, 2, 0, 2}, // msub subtracts a signed product
+        {0x0109002E, 1, 1, 0x8000000000000000ULL, 0x7FFFFFFFFFFFFFFFULL},
+        {0x0109002F, 0xFFFFFFFF, 2, 0, 0xFFFFFFFE00000002ULL}, // msubu
+        {0x0109002F, 1, 1, 0x0000000100000000ULL, 0x00000000FFFFFFFFULL},
+    };
+    for (const auto &test : cases)
+    {
+        SCOPED_TRACE(test.instruction);
+        SCOPED_TRACE(test.accumulator);
+        const auto result = run_alu(test.instruction, test.left, test.right, {.accumulator = test.accumulator});
+        EXPECT_EQ(result.high, static_cast<std::uint32_t>(test.expected >> 32));
+        EXPECT_EQ(result.low, static_cast<std::uint32_t>(test.expected));
+    }
+}
+
+TEST(CpuTest, DividesWithAllegrexOverflowAndZeroDivisorResults)
+{
+    struct DivideCase
+    {
+        std::uint32_t instruction;
+        std::uint32_t numerator;
+        std::uint32_t denominator;
+        std::uint32_t quotient;
+        std::uint32_t remainder;
+    };
+    // Special cases match third_party/pspautotests/tests/cpu/cpu_alu/cpu_div.expected.
+    const DivideCase cases[] = {
+        {0x0109001A, 100, 7, 14, 2},
+        {0x0109001A, 0xFFFFFF9C, 7, 0xFFFFFFF2, 0xFFFFFFFE},
+        {0x0109001A, 100, 0xFFFFFFF9, 0xFFFFFFF2, 2},
+        {0x0109001A, 0xFFFFFF9C, 0xFFFFFFF9, 14, 0xFFFFFFFE},
+        {0x0109001A, 0x80000000, 0xFFFFFFFF, 0x80000000, 0},
+        {0x0109001A, 0x80000000, 0xFFFFFFFE, 0x40000000, 0},
+        {0x0109001A, 0, 0, 0xFFFFFFFF, 0},
+        {0x0109001A, 1, 0, 0xFFFFFFFF, 1},
+        {0x0109001A, 0xFFFFFFFF, 0, 1, 0xFFFFFFFF},
+        {0x0109001A, 0x80000000, 0, 1, 0x80000000},
+        {0x0109001B, 0xFFFFFFFF, 7, 0x24924924, 3},
+        {0x0109001B, 0x80000000, 0xFFFFFFFF, 0, 0x80000000},
+        {0x0109001B, 0, 0, 0xFFFF, 0},
+        {0x0109001B, 1, 0, 0xFFFF, 1},
+        {0x0109001B, 0xFFFF, 0, 0xFFFF, 0xFFFF},
+        {0x0109001B, 0x10000, 0, 0xFFFFFFFF, 0x10000},
+        {0x0109001B, 0xFFFFFFFF, 0, 0xFFFFFFFF, 0xFFFFFFFF},
+    };
+    for (const auto &test : cases)
+    {
+        SCOPED_TRACE(test.instruction);
+        SCOPED_TRACE(test.numerator);
+        SCOPED_TRACE(test.denominator);
+        const auto result =
+            run_alu(test.instruction, test.numerator, test.denominator, {.accumulator = 0x123456789ABCDEF0ULL});
+        EXPECT_EQ(result.low, test.quotient);
+        EXPECT_EQ(result.high, test.remainder);
+    }
+}
+
+TEST(CpuTest, NewAluInstructionsDiscardWritesToZero)
+{
+    const std::uint32_t instructions[] = {
+        0x00290002, // rotr $zero, $t1, 0
+        0x01090004, // sllv $zero, $t1, $t0
+        0x01090006, // srlv
+        0x01090046, // rotrv
+        0x01090007, // srav
+        0x0109000A, // movz
+        0x0109000B, // movn
+        0x00000010, // mfhi
+        0x00000012, // mflo
+        0x01000016, // clz
+        0x01000017, // clo
+        0x0109002C, // max
+        0x0109002D, // min
+        0x7C0900A0, // wsbh
+        0x7C0900E0, // wsbw
+        0x7C090420, // seb
+        0x7C090520, // bitrev
+        0x7C090620, // seh
+        0x7D000000, // ext
+        0x7D000004, // ins
+    };
+    for (const auto instruction : instructions)
+    {
+        SCOPED_TRACE(instruction);
+        const auto result =
+            run_alu(instruction, 0xFFFFFFFF, 0xFFFFFFFF, {.destination = 7, .accumulator = 0x123456789ABCDEF0ULL});
+        EXPECT_EQ(result.zero, 0U);
+        EXPECT_EQ(result.high, 0x12345678U);
+        EXPECT_EQ(result.low, 0x9ABCDEF0U);
+    }
+}
+
+TEST(CpuTest, RejectsInvalidAluEncodingsWithoutAdvancing)
+{
+    const std::uint32_t instructions[] = {
+        0x00495002, // invalid SRL/ROTR selector
+        0x01095086, // invalid SRLV/ROTRV selector
+        0x7D09F840, // ext width 32 at position 1
+        0x7D090044, // ins end 0 before start 1
+        0x7C095120, // unknown BSHFL operation
+        0x7C00003F, // unknown SPECIAL3 function
+    };
+    for (const auto instruction : instructions)
+    {
+        SCOPED_TRACE(instruction);
+        Memory memory(GuestAddress{kProgramBase}, 16);
+        load_program(memory, {instruction});
+        Cpu cpu(memory, GuestAddress{kProgramBase});
+        EXPECT_THROW(cpu.step(), std::exception);
+        EXPECT_EQ(cpu.program_counter().value_of(), kProgramBase);
+        EXPECT_EQ(cpu.register_value(9), 0U);
+        EXPECT_EQ(cpu.register_value(10), 0U);
+        memory.write_u32(GuestAddress{kProgramBase}, 0x00000000);
+        step_n(cpu, 2);
+        EXPECT_EQ(cpu.program_counter().value_of(), kProgramBase + 8);
+    }
 }
 
 } // namespace psp
