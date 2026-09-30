@@ -27,4 +27,4 @@ Project tests live beside the code they cover, under each component's `tests/` d
 
 ## CPU documentation
 
-See [the Allegrex CPU reference guide](docs/cpu-reference.md) for instruction manuals, PSP-specific encoding notes, implementation references, and the proposed branching changes.
+See [the Allegrex CPU reference guide](docs/cpu-reference.md) for instruction manuals, PSP-specific encoding notes, implementation references, and supported branching behavior.

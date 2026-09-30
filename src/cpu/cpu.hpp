@@ -12,6 +12,13 @@ namespace psp
 
 class Cpu
 {
+    // Stage instruction addresses so a failed step preserves pending control flow.
+    struct ControlFlow
+    {
+        GuestAddress next_instruction;
+        GuestAddress following_instruction;
+    };
+
 public:
     Cpu(Memory &memory, GuestAddress entry_point);
 
@@ -21,13 +28,18 @@ public:
     std::uint32_t register_value(std::size_t index) const;
 
 private:
-    void execute(std::uint32_t instruction);
-    void execute_special(std::uint32_t instruction);
+    void execute(std::uint32_t instruction, ControlFlow &flow);
+    void execute_special(std::uint32_t instruction, ControlFlow &flow);
+    void execute_regimm(std::uint32_t instruction, ControlFlow &flow);
+    GuestAddress branch_address(std::uint32_t instruction) const;
+    void skip_delay_slot(ControlFlow &flow) const;
+    GuestAddress jump_address(std::uint32_t instruction) const;
     GuestAddress word_address(std::uint32_t instruction) const;
     void write_register(std::size_t index, std::uint32_t value);
 
     Memory &memory_;
     GuestAddress program_counter_;
+    GuestAddress next_program_counter_;
     std::array<std::uint32_t, 32> registers_{};
 };
 

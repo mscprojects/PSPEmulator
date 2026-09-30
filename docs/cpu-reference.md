@@ -39,10 +39,14 @@ These layouts follow the MIPS manual and PRXTool encodings linked above. Check A
 
 If sources disagree, record the exact instruction encoding and inputs, compare against PSP hardware results where available, and preserve the result in a regression test.
 
-## Proposed CPU changes for branching
+## Branching and calls
 
-Keep the current interpreter and opcode switches. The next implementation should introduce current and next instruction addresses so the delay-slot instruction executes before a branch target. Handle the untaken branch-likely case explicitly because it skips the delay slot. Preserve the current contract that a rejected instruction does not advance execution.
+The interpreter implements `J`, `JAL`, `JR`, `JALR`, `BEQ`, `BNE`, `BLEZ`, `BGTZ`, `BLTZ`, and `BGEZ`, plus integer branch-likely and branch-and-link variants. Each opcode states its condition directly. Ordinary branches execute the delay-slot instruction whether taken or untaken; branch-likely instructions skip it when untaken. FPU and VFPU branches await their respective register state and instruction support.
 
-Read jump operands before writing link registers, including when `JALR` uses the same register for both. Add tests for taken and untaken branches, backward loops, delay-slot effects, and calls returning after the delay slot.
+The CPU keeps the current instruction address and the next instruction address. `step()` stages their successors locally and commits them only after successful execution, preserving the pending target when a delay-slot instruction fails. Exceptions are reported to the host; guest exception registers and exception handlers are not implemented. Control transfers inside delay slots are outside this milestone's supported behavior.
+
+Branch offsets count words relative to `PC + 4`; `J` and `JAL` combine their 26-bit word target with the upper four bits of `PC + 4`. Link instructions save `PC + 8`, which is already visible to the delay-slot instruction. Branch-and-link instructions write the link even when untaken. `JALR` reads its target before writing the destination register. A misaligned register jump faults when fetching the target, after the delay slot executes.
+
+[CPU tests](../src/cpu/tests/cpu_test.cpp) cover taken and untaken conditions for every integer branch variant, signed boundaries, a backward loop, function calls and returns, `JALR` register aliasing, jump region boundaries, skipped invalid delay slots, and retry after a failed delay slot. The [PPSSPP interpreter](https://github.com/hrydgard/ppsspp/blob/master/Core/MIPS/Interpreter.cpp) is a cross-check for branch and link behavior.
 
 Extract instruction-field accessors only when they remove duplication or gain another caller. A shared decoder becomes useful when tracing or disassembly needs the same instruction identification. Add HI/LO state with the multiply/divide instructions that need it.
