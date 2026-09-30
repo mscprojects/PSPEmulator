@@ -34,8 +34,8 @@ std::uint32_t Cpu::register_value(std::size_t index) const
 
 void Cpu::execute(std::uint32_t instruction)
 {
-    const auto source = (instruction >> 21) & 31U;
-    const auto target = (instruction >> 16) & 31U;
+    const auto source = (instruction >> 21) & 0b11111U; // rs: bits 25-21
+    const auto target = (instruction >> 16) & 0b11111U; // rt: bits 20-16
     const auto immediate = static_cast<std::uint16_t>(instruction);
     const auto signed_immediate = static_cast<std::int32_t>(std::bit_cast<std::int16_t>(immediate));
     const auto opcode = instruction >> 26;
@@ -91,12 +91,12 @@ void Cpu::execute(std::uint32_t instruction)
 
 void Cpu::execute_special(std::uint32_t instruction)
 {
-    const auto source = (instruction >> 21) & 31U;
-    const auto target = (instruction >> 16) & 31U;
-    const auto destination = (instruction >> 11) & 31U;
-    const auto shift = (instruction >> 6) & 31U;
+    const auto source = (instruction >> 21) & 0b11111U;      // rs: bits 25-21
+    const auto target = (instruction >> 16) & 0b11111U;      // rt: bits 20-16
+    const auto destination = (instruction >> 11) & 0b11111U; // rd: bits 15-11
+    const auto shift = (instruction >> 6) & 0b11111U;        // shamt: bits 10-6
 
-    switch (instruction & 63U)
+    switch (instruction & 0b111111U) // funct: bits 5-0
     {
     case 0x00: // SLL (also NOP)
         write_register(destination, registers_[target] << shift);
