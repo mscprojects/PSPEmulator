@@ -24,3 +24,7 @@ cmake --build build --parallel
 The first core component is a single contiguous `psp::Memory` region. It accepts `psp::GuestAddress` values, starts zeroed, reads and writes 8-, 16-, and 32-bit values in little-endian order, permits unaligned access, and throws `std::out_of_range` when an access crosses its boundaries. The CPU will later decide which accesses require alignment checks.
 
 Project tests live beside the code they cover, under each component's `tests/` directory. Upstream PSP tests and the `strong_type` library are pinned in `third_party/` as submodules. After cloning, initialize them with `git submodule update --init --recursive`.
+
+## CPU documentation
+
+See [the Allegrex CPU reference guide](docs/cpu-reference.md) for instruction manuals, PSP-specific encoding notes, implementation references, and the proposed branching changes.
