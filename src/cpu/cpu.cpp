@@ -7,10 +7,21 @@
 namespace psp
 {
 
-Cpu::Cpu(Memory &memory, GuestAddress entry_point)
-    : memory_(memory), program_counter_(entry_point), next_program_counter_(entry_point.value_of() + 4U)
+namespace
 {
-    if ((entry_point.value_of() & 3U) != 0)
+
+constexpr std::uint32_t instruction_size = 4;
+constexpr std::uint32_t after_delay_slot_offset = 2 * instruction_size;
+constexpr std::uint32_t word_alignment_mask = 0b11U;
+constexpr std::uint32_t jump_region_mask = 0xF0000000U;
+constexpr std::uint32_t jump_target_mask = 0x03FFFFFFU;
+
+} // namespace
+
+Cpu::Cpu(Memory &memory, GuestAddress entry_point)
+    : memory_(memory), program_counter_(entry_point), next_program_counter_(entry_point.value_of() + instruction_size)
+{
+    if ((entry_point.value_of() & word_alignment_mask) != 0)
     {
         throw std::invalid_argument("Instruction address must be word aligned");
     }
@@ -18,12 +29,12 @@ Cpu::Cpu(Memory &memory, GuestAddress entry_point)
 
 void Cpu::step()
 {
-    if ((program_counter_.value_of() & 3U) != 0)
+    if ((program_counter_.value_of() & word_alignment_mask) != 0)
     {
         throw std::invalid_argument("Instruction address must be word aligned");
     }
     const auto instruction = memory_.read_u32(program_counter_);
-    ControlFlow flow{next_program_counter_, GuestAddress{next_program_counter_.value_of() + 4U}};
+    ControlFlow flow{next_program_counter_, GuestAddress{next_program_counter_.value_of() + instruction_size}};
     execute(instruction, flow);
     program_counter_ = flow.next_instruction;
     next_program_counter_ = flow.following_instruction;
@@ -66,7 +77,7 @@ void Cpu::execute(std::uint32_t instruction, ControlFlow &flow)
     case 0x03: // JAL
         flow.following_instruction = jump_address(instruction);
         // Return after the delay slot; the link is already visible inside that slot.
-        write_register(31, program_counter_.value_of() + 8U);
+        write_register(return_address_register, program_counter_.value_of() + after_delay_slot_offset);
         break;
     case 0x04: // BEQ
         if (registers_[source] == registers_[target])
@@ -192,7 +203,7 @@ void Cpu::execute_special(std::uint32_t instruction, ControlFlow &flow)
     case 0x09: // JALR
         // Capture rs before writing rd, which may be the same register.
         flow.following_instruction = GuestAddress{registers_[source]};
-        write_register(destination, program_counter_.value_of() + 8U);
+        write_register(destination, program_counter_.value_of() + after_delay_slot_offset);
         break;
     case 0x21: // ADDU
         write_register(destination, registers_[source] + registers_[target]);
@@ -269,14 +280,14 @@ void Cpu::execute_regimm(std::uint32_t instruction, ControlFlow &flow)
         {
             flow.following_instruction = branch_address(instruction);
         }
-        write_register(31, program_counter_.value_of() + 8U);
+        write_register(return_address_register, program_counter_.value_of() + after_delay_slot_offset);
         break;
     case 0x11: // BGEZAL
         if (value >= 0)
         {
             flow.following_instruction = branch_address(instruction);
         }
-        write_register(31, program_counter_.value_of() + 8U);
+        write_register(return_address_register, program_counter_.value_of() + after_delay_slot_offset);
         break;
     case 0x12: // BLTZALL
         if (value < 0)
@@ -287,7 +298,7 @@ void Cpu::execute_regimm(std::uint32_t instruction, ControlFlow &flow)
         {
             skip_delay_slot(flow);
         }
-        write_register(31, program_counter_.value_of() + 8U);
+        write_register(return_address_register, program_counter_.value_of() + after_delay_slot_offset);
         break;
     case 0x13: // BGEZALL
         if (value >= 0)
@@ -298,7 +309,7 @@ void Cpu::execute_regimm(std::uint32_t instruction, ControlFlow &flow)
         {
             skip_delay_slot(flow);
         }
-        write_register(31, program_counter_.value_of() + 8U);
+        write_register(return_address_register, program_counter_.value_of() + after_delay_slot_offset);
         break;
     default:
         throw std::runtime_error("Unsupported Allegrex instruction");
@@ -309,21 +320,23 @@ GuestAddress Cpu::branch_address(std::uint32_t instruction) const
 {
     const auto immediate = static_cast<std::uint16_t>(instruction);
     const auto offset = static_cast<std::int32_t>(std::bit_cast<std::int16_t>(immediate));
-    // Branch offsets count words relative to PC + 4. Shift unsigned bits to allow negative offsets.
-    return GuestAddress{program_counter_.value_of() + 4U + (static_cast<std::uint32_t>(offset) << 2)};
+    // Branch offsets count instructions relative to PC + 4. Unsigned arithmetic permits wrapping backwards.
+    return GuestAddress{program_counter_.value_of() + instruction_size +
+                        static_cast<std::uint32_t>(offset) * instruction_size};
 }
 
 void Cpu::skip_delay_slot(ControlFlow &flow) const
 {
     // Untaken branch-likely instructions skip the slot, including its side effects and faults.
-    flow.next_instruction = GuestAddress{program_counter_.value_of() + 8U};
-    flow.following_instruction = GuestAddress{program_counter_.value_of() + 12U};
+    flow.next_instruction = GuestAddress{program_counter_.value_of() + after_delay_slot_offset};
+    flow.following_instruction = GuestAddress{flow.next_instruction.value_of() + instruction_size};
 }
 
 GuestAddress Cpu::jump_address(std::uint32_t instruction) const
 {
     // J/JAL retain the upper four bits of PC + 4 and supply the remaining word address.
-    return GuestAddress{((program_counter_.value_of() + 4U) & 0xF0000000U) | ((instruction & 0x03FFFFFFU) << 2)};
+    return GuestAddress{((program_counter_.value_of() + instruction_size) & jump_region_mask) |
+                        ((instruction & jump_target_mask) * instruction_size)};
 }
 
 GuestAddress Cpu::word_address(std::uint32_t instruction) const
@@ -333,7 +346,7 @@ GuestAddress Cpu::word_address(std::uint32_t instruction) const
     const auto signed_immediate = static_cast<std::int32_t>(std::bit_cast<std::int16_t>(immediate));
     // The offset is signed, but address arithmetic wraps modulo 2^32.
     const auto address = registers_[source] + static_cast<std::uint32_t>(signed_immediate);
-    if ((address & 3U) != 0)
+    if ((address & word_alignment_mask) != 0)
     {
         throw std::invalid_argument("Word address must be aligned");
     }
@@ -343,7 +356,7 @@ GuestAddress Cpu::word_address(std::uint32_t instruction) const
 void Cpu::write_register(std::size_t index, std::uint32_t value)
 {
     // Register zero is hardwired to zero; writes to it are discarded.
-    if (index != 0)
+    if (index != zero_register)
     {
         registers_[index] = value;
     }
