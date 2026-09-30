@@ -19,9 +19,9 @@ class Cpu
         GuestAddress following_instruction;
     };
 
-    static constexpr std::size_t register_count = 32;
-    static constexpr std::size_t zero_register = 0;            // $zero
-    static constexpr std::size_t return_address_register = 31; // $ra
+    static constexpr std::size_t kRegisterCount = 32;
+    static constexpr std::size_t kZeroRegister = 0;           // $zero
+    static constexpr std::size_t kReturnAddressRegister = 31; // $ra
 
 public:
     Cpu(Memory &memory, GuestAddress entry_point);
@@ -44,7 +44,7 @@ private:
     Memory &memory_;
     GuestAddress program_counter_;
     GuestAddress next_program_counter_;
-    std::array<std::uint32_t, register_count> registers_{};
+    std::array<std::uint32_t, kRegisterCount> registers_{};
 };
 
 } // namespace psp
