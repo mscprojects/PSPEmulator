@@ -33,7 +33,7 @@ These layouts follow the MIPS manual and PRXTool encodings linked above. Check A
 
 ## Verification in this repository
 
-- [cpu_alu source](../third_party/pspautotests/tests/cpu/cpu_alu/cpu_alu.c) and [expected output](../third_party/pspautotests/tests/cpu/cpu_alu/cpu_alu.expected) define the next executable-test target.
+- [cpu_alu source](../third_party/pspautotests/tests/cpu/cpu_alu/cpu_alu.c) and [expected output](../third_party/pspautotests/tests/cpu/cpu_alu/cpu_alu.expected) define the executable integration-test target.
 - [CPU unit tests](../src/cpu/tests/cpu_test.cpp) verify individual instruction effects and execution order without needing a loader or PSP runtime.
 - Inspect the compiled PRX as well as the C source: compiler output, startup code, and linked libraries can require additional instructions.
 
@@ -57,4 +57,12 @@ HI and LO start at zero and are accessible through `MFHI`, `MFLO`, `MTHI`, and `
 
 Tests cover each added instruction, boundary shift counts, signedness, full-width bitfields, register aliasing, HI/LO carry and wraparound, division edge cases, and writes to `$zero`. Invalid bitfield ranges and unsupported rotate selectors are rejected before advancing execution.
 
-This instruction support does not yet run the PRX end to end. Segment loading, relocations, import resolution, startup services, and output capture remain necessary. Other instruction families, including FPU and VFPU operations, remain unsupported.
+The [runtime integration test](../src/runtime/tests/execution_test.cpp) executes the bundled `cpu_alu.prx` from its entry point at two load addresses, verifies successful termination, and compares its entire output with `cpu_alu.expected`. The runtime supplies the startup and I/O services used by this path; guest libc performs the formatting. Other instruction families, including FPU and VFPU operations, remain unsupported.
+
+## Runtime boundary
+
+`Cpu::step()` returns an optional syscall code after committing instruction control flow. In an import stub, `JR $ra` schedules the return and its delay-slot `SYSCALL` reports a service to the runtime. The runtime dispatches it by library name and NID, supplies results in guest registers, and resumes execution at the committed return target. CPU instruction semantics do not depend on PSP service implementations.
+
+Byte and halfword loads and stores (`LB`, `LBU`, `LH`, `LHU`, `SB`, `SH`) support the compiled startup and libc code. Signed loads extend their sign bits; unsigned loads zero-extend. Halfword and word accesses require their respective alignments. Memory bounds are checked before a register or memory write.
+
+Service identifiers and signatures were checked against the [PSPSDK import tables](https://github.com/pspdev/pspsdk/tree/master/src/user) and PPSSPP's [thread](https://github.com/hrydgard/ppsspp/blob/master/Core/HLE/sceKernelThread.cpp), [memory](https://github.com/hrydgard/ppsspp/blob/master/Core/HLE/sceKernelMemory.cpp), and [I/O](https://github.com/hrydgard/ppsspp/blob/master/Core/HLE/sceIo.cpp) dispatch tables. The bundled autotest common code defines the emulator device commands for probing, headless display detection, and output capture.

@@ -194,6 +194,66 @@ TEST(CpuTest, RejectsUnsupportedAndMisalignedInstructionsWithoutAdvancing)
     EXPECT_THROW(Cpu(memory, GuestAddress{kProgramBase + 1}), std::invalid_argument);
 }
 
+TEST(CpuTest, LoadsAndStoresBytesAndHalfwords)
+{
+    Memory memory(GuestAddress{kProgramBase}, 128);
+    load_program(memory, {
+                             0x81090000, // lb $t1, 0($t0)
+                             0x910A0000, // lbu $t2, 0($t0)
+                             0x850B0000, // lh $t3, 0($t0)
+                             0x950C0000, // lhu $t4, 0($t0)
+                             0xA10D0002, // sb $t5, 2($t0)
+                             0xA50E0004, // sh $t6, 4($t0)
+                         });
+    memory.write_u32(GuestAddress{kProgramBase + 64}, 0x123480FF);
+    memory.write_u32(GuestAddress{kProgramBase + 68}, 0xAABBCCDD);
+    Cpu cpu(memory, GuestAddress{kProgramBase});
+    cpu.set_register_value(8, kProgramBase + 64);
+    cpu.set_register_value(13, 0xABCDEF56);
+    cpu.set_register_value(14, 0x12347890);
+    step_n(cpu, 6);
+    EXPECT_EQ(cpu.register_value(9), 0xFFFFFFFFU);
+    EXPECT_EQ(cpu.register_value(10), 0xFFU);
+    EXPECT_EQ(cpu.register_value(11), 0xFFFF80FFU);
+    EXPECT_EQ(cpu.register_value(12), 0x80FFU);
+    EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 64}), 0x125680FFU);
+    EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 68}), 0xAABB7890U);
+}
+
+TEST(CpuTest, RejectsMisalignedHalfwordsAndOutOfBoundsByteAccess)
+{
+    for (const std::uint32_t instruction : {0x85090001U, 0x95090001U, 0xA5090001U, 0x81090040U, 0xA1090040U})
+    {
+        SCOPED_TRACE(instruction);
+        Memory memory(GuestAddress{kProgramBase}, 64);
+        load_program(memory, {instruction});
+        Cpu cpu(memory, GuestAddress{kProgramBase});
+        cpu.set_register_value(8, kProgramBase);
+        cpu.set_register_value(9, 0x12345678);
+        EXPECT_ANY_THROW(cpu.step());
+        EXPECT_EQ(cpu.program_counter(), GuestAddress{kProgramBase});
+        EXPECT_EQ(cpu.register_value(9), 0x12345678U);
+        EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase}), instruction);
+    }
+}
+
+TEST(CpuTest, ReportsSyscallsAfterCommittingTheReturnDelaySlot)
+{
+    Memory memory(GuestAddress{kProgramBase}, 32);
+    load_program(memory, {0x03E00008, (123U << 6) | 0xC}); // jr $ra; syscall 123
+    Cpu cpu(memory, GuestAddress{kProgramBase});
+    cpu.set_register_value(31, kProgramBase + 16);
+    EXPECT_FALSE(cpu.step());
+    EXPECT_EQ(cpu.program_counter(), GuestAddress{kProgramBase + 4});
+    EXPECT_EQ(cpu.step(), 123U);
+    EXPECT_EQ(cpu.program_counter(), GuestAddress{kProgramBase + 16});
+    cpu.set_register_value(2, 42);
+    EXPECT_EQ(cpu.register_value(2), 42U);
+    cpu.set_register_value(0, 99);
+    EXPECT_EQ(cpu.register_value(0), 0U);
+    EXPECT_THROW(cpu.set_register_value(32, 1), std::out_of_range);
+}
+
 TEST(CpuTest, ExecutesEveryIntegerBranchVariant)
 {
     const BranchCase cases[] = {

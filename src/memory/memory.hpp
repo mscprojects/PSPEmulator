@@ -1,10 +1,10 @@
 #pragma once
 
+#include "common/payload.hpp"
 #include "memory/address.hpp"
 
 #include <cstddef>
 #include <cstdint>
-#include <vector>
 
 namespace psp
 {
@@ -21,6 +21,8 @@ public:
     void write_u8(GuestAddress address, std::uint8_t value);
     void write_u16(GuestAddress address, std::uint16_t value);
     void write_u32(GuestAddress address, std::uint32_t value);
+    // Copy a guest byte range after checking its full extent. An empty range is a no-op.
+    void write_bytes(GuestAddress address, PayloadSpan bytes);
 
 private:
     std::size_t checked_offset(GuestAddress address, std::size_t width) const;
@@ -28,7 +30,7 @@ private:
     void write_le(GuestAddress address, std::uint32_t value, std::size_t width);
 
     GuestAddress base_address_;
-    std::vector<std::uint8_t> bytes_;
+    Payload bytes_;
 };
 
 } // namespace psp

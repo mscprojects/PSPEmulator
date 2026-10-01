@@ -1,5 +1,6 @@
 #include "memory/memory.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 
@@ -44,6 +45,16 @@ void Memory::write_u16(GuestAddress address, std::uint16_t value)
 void Memory::write_u32(GuestAddress address, std::uint32_t value)
 {
     write_le(address, value, 4);
+}
+
+void Memory::write_bytes(GuestAddress address, PayloadSpan bytes)
+{
+    if (bytes.empty())
+    {
+        return;
+    }
+    const auto offset = checked_offset(address, bytes.size());
+    std::ranges::copy(bytes, bytes_.begin() + static_cast<std::ptrdiff_t>(offset));
 }
 
 std::size_t Memory::checked_offset(GuestAddress address, std::size_t width) const

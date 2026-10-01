@@ -18,10 +18,8 @@ constexpr std::uint32_t kWordAlignmentMask = 0b11U;
 constexpr std::uint32_t kJumpRegionMask = 0xF0000000U;
 constexpr std::uint32_t kJumpTargetMask = 0x03FFFFFFU;
 constexpr unsigned kRegisterBits = 32;
-constexpr unsigned kByteBits = 8;
 constexpr std::uint32_t kShiftCountMask = 0b11111U;
 constexpr std::uint32_t kLowHalfwordMask = 0xFFFFU;
-constexpr std::uint32_t kAllWordBits = std::numeric_limits<std::uint32_t>::max();
 constexpr std::uint32_t kEvenByteMask = 0x00FF00FFU;
 constexpr std::uint32_t kOddByteMask = 0xFF00FF00U;
 
@@ -44,7 +42,7 @@ Cpu::Cpu(Memory &memory, GuestAddress entry_point)
     }
 }
 
-void Cpu::step()
+std::optional<std::uint32_t> Cpu::step()
 {
     if ((program_counter_.value_of() & kWordAlignmentMask) != 0)
     {
@@ -52,9 +50,18 @@ void Cpu::step()
     }
     const auto instruction = memory_.read_u32(program_counter_);
     ControlFlow flow{next_program_counter_, GuestAddress{next_program_counter_.value_of() + kInstructionSize}};
-    execute(instruction, flow);
+    std::optional<std::uint32_t> syscall;
+    if ((instruction & 0xFC00003FU) == 0x0000000CU)
+    {
+        syscall = (instruction >> 6) & 0xFFFFFU;
+    }
+    else
+    {
+        execute(instruction, flow);
+    }
     program_counter_ = flow.next_instruction;
     next_program_counter_ = flow.following_instruction;
+    return syscall;
 }
 
 GuestAddress Cpu::program_counter() const
@@ -65,6 +72,15 @@ GuestAddress Cpu::program_counter() const
 std::uint32_t Cpu::register_value(std::size_t index) const
 {
     return registers_.at(index);
+}
+
+void Cpu::set_register_value(std::size_t index, std::uint32_t value)
+{
+    if (index >= registers_.size())
+    {
+        throw std::out_of_range("CPU register index is out of range");
+    }
+    write_register(index, value);
 }
 
 void Cpu::execute(std::uint32_t instruction, ControlFlow &flow)
@@ -187,11 +203,32 @@ void Cpu::execute(std::uint32_t instruction, ControlFlow &flow)
     case 0x1F: // SPECIAL3: bitfields and Allegrex byte/bit operations.
         execute_special3(instruction);
         break;
+    case 0x20: // LB
+        write_register(target, static_cast<std::uint32_t>(std::bit_cast<std::int8_t>(
+                                   memory_.read_u8(data_address(instruction, DataAlignment::Byte)))));
+        break;
+    case 0x21: // LH
+        write_register(target, static_cast<std::uint32_t>(std::bit_cast<std::int16_t>(
+                                   memory_.read_u16(data_address(instruction, DataAlignment::Halfword)))));
+        break;
     case 0x23: // LW
-        write_register(target, memory_.read_u32(word_address(instruction)));
+        write_register(target, memory_.read_u32(data_address(instruction, DataAlignment::Word)));
+        break;
+    case 0x24: // LBU
+        write_register(target, memory_.read_u8(data_address(instruction, DataAlignment::Byte)));
+        break;
+    case 0x25: // LHU
+        write_register(target, memory_.read_u16(data_address(instruction, DataAlignment::Halfword)));
+        break;
+    case 0x28: // SB
+        memory_.write_u8(data_address(instruction, DataAlignment::Byte), static_cast<std::uint8_t>(registers_[target]));
+        break;
+    case 0x29: // SH
+        memory_.write_u16(data_address(instruction, DataAlignment::Halfword),
+                          static_cast<std::uint16_t>(registers_[target]));
         break;
     case 0x2B: // SW
-        memory_.write_u32(word_address(instruction), registers_[target]);
+        memory_.write_u32(data_address(instruction, DataAlignment::Word), registers_[target]);
         break;
     default:
         throw std::runtime_error("Unsupported Allegrex instruction");
@@ -301,7 +338,7 @@ void Cpu::execute_special(std::uint32_t instruction, ControlFlow &flow)
         // Handle Allegrex's special results before host division, which would be undefined.
         if (denominator == 0)
         {
-            low_register_ = numerator < 0 ? 1U : kAllWordBits;
+            low_register_ = numerator < 0 ? 1U : 0xFFFFFFFFU;
             high_register_ = registers_[source];
         }
         else if (numerator == std::numeric_limits<std::int32_t>::min() && denominator == -1)
@@ -320,7 +357,7 @@ void Cpu::execute_special(std::uint32_t instruction, ControlFlow &flow)
         if (registers_[target] == 0)
         {
             // Hardware returns a 16-bit quotient for small numerators; see cpu_div.expected.
-            low_register_ = registers_[source] <= kLowHalfwordMask ? kLowHalfwordMask : kAllWordBits;
+            low_register_ = registers_[source] <= kLowHalfwordMask ? kLowHalfwordMask : 0xFFFFFFFFU;
             high_register_ = registers_[source];
         }
         else
@@ -417,8 +454,8 @@ void Cpu::execute_special3(std::uint32_t instruction)
         switch (position)
         {
         case 0x02: // WSBH
-            write_register(destination, ((registers_[target] & kOddByteMask) >> kByteBits) |
-                                            ((registers_[target] & kEvenByteMask) << kByteBits));
+            write_register(destination,
+                           ((registers_[target] & kOddByteMask) >> 8) | ((registers_[target] & kEvenByteMask) << 8));
             break;
         case 0x03: // WSBW
             write_register(destination, std::byteswap(registers_[target]));
@@ -556,16 +593,16 @@ GuestAddress Cpu::jump_address(std::uint32_t instruction) const
                         ((instruction & kJumpTargetMask) * kInstructionSize)};
 }
 
-GuestAddress Cpu::word_address(std::uint32_t instruction) const
+GuestAddress Cpu::data_address(std::uint32_t instruction, DataAlignment alignment) const
 {
     const auto source = (instruction >> 21) & 0b11111U; // rs: bits 25-21
     const auto immediate = static_cast<std::uint16_t>(instruction);
     const auto signed_immediate = static_cast<std::int32_t>(std::bit_cast<std::int16_t>(immediate));
     // The offset is signed, but address arithmetic wraps modulo 2^32.
     const auto address = registers_[source] + static_cast<std::uint32_t>(signed_immediate);
-    if ((address & kWordAlignmentMask) != 0)
+    if (address % static_cast<std::uint32_t>(alignment) != 0)
     {
-        throw std::invalid_argument("Word address must be aligned");
+        throw std::invalid_argument("Data address must be aligned");
     }
     return GuestAddress{address};
 }

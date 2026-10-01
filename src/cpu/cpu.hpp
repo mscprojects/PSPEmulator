@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace psp
 {
@@ -19,6 +20,13 @@ class Cpu
         GuestAddress following_instruction;
     };
 
+    enum class DataAlignment : std::uint8_t
+    {
+        Byte = 1,
+        Halfword = 2,
+        Word = 4,
+    };
+
     static constexpr std::size_t kRegisterCount = 32;
     static constexpr std::size_t kZeroRegister = 0;           // $zero
     static constexpr std::size_t kReturnAddressRegister = 31; // $ra
@@ -26,10 +34,14 @@ class Cpu
 public:
     Cpu(Memory &memory, GuestAddress entry_point);
 
-    void step();
+    // Execute one instruction. A SYSCALL reports its code after committing control
+    // flow; the runtime handles it before executing the next instruction.
+    std::optional<std::uint32_t> step();
 
     GuestAddress program_counter() const;
     std::uint32_t register_value(std::size_t index) const;
+    // Initialize registers and supply service results; writes to $zero are discarded.
+    void set_register_value(std::size_t index, std::uint32_t value);
 
 private:
     void execute(std::uint32_t instruction, ControlFlow &flow);
@@ -39,7 +51,7 @@ private:
     GuestAddress branch_address(std::uint32_t instruction) const;
     void skip_delay_slot(ControlFlow &flow) const;
     GuestAddress jump_address(std::uint32_t instruction) const;
-    GuestAddress word_address(std::uint32_t instruction) const;
+    GuestAddress data_address(std::uint32_t instruction, DataAlignment alignment) const;
     std::uint64_t hi_lo_value() const;
     void write_hi_lo(std::uint64_t value);
     void write_register(std::size_t index, std::uint32_t value);
