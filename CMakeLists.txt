@@ -31,7 +31,6 @@ endif()
 add_library(psp_core
     src/common/payload_reader.cpp
     src/cpu/cpu.cpp
-    src/cpu/cpu_state.cpp
     src/memory/memory.cpp
     src/loader/prx_reader.cpp
     src/loader/prx.cpp

@@ -75,12 +75,11 @@ AluResult run_alu(std::uint32_t instruction, std::uint32_t left, std::uint32_t r
                              0x00005810, // mfhi $t3
                              0x00006012, // mflo $t4
                          });
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
     step_n(cpu, state, 15);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 60);
-    return {state.register_value(10), state.register_value(9), state.register_value(11), state.register_value(12),
-            state.register_value(0)};
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 60);
+    return {state.registers[10], state.registers[9], state.registers[11], state.registers[12], state.registers[0]};
 }
 
 } // namespace
@@ -98,13 +97,13 @@ TEST(CpuTest, SharedExecutorPreservesThreadStateAndDelaySlotSnapshots)
                              0x00006010, // mfhi $t4
                          });
     Cpu cpu(memory);
-    CpuState first(GuestAddress{kProgramBase});
-    CpuState second(GuestAddress{kProgramBase});
-    first.set_register_value(8, 0xFFFFFFFF);
-    first.set_register_value(9, 2);
-    second.set_register_value(8, 3);
-    second.set_register_value(9, 4);
-    second.set_register_value(10, 10);
+    CpuState first{.program_counter = GuestAddress{kProgramBase}};
+    CpuState second{.program_counter = GuestAddress{kProgramBase}};
+    first.registers[8] = 0xFFFFFFFF;
+    first.registers[9] = 2;
+    second.registers[8] = 3;
+    second.registers[9] = 4;
+    second.registers[10] = 10;
 
     cpu.step(first);
     cpu.step(second);
@@ -114,24 +113,24 @@ TEST(CpuTest, SharedExecutorPreservesThreadStateAndDelaySlotSnapshots)
     auto snapshot = first;
     cpu.step(second);
     cpu.step(first);
-    EXPECT_EQ(first.program_counter().value_of(), kProgramBase + 20);
-    EXPECT_EQ(second.program_counter().value_of(), kProgramBase + 12);
+    EXPECT_EQ(first.program_counter.value_of(), kProgramBase + 20);
+    EXPECT_EQ(second.program_counter.value_of(), kProgramBase + 12);
     step_n(cpu, first, 2);
     step_n(cpu, second, 2);
-    EXPECT_EQ(first.register_value(10), 1U);
-    EXPECT_EQ(first.register_value(11), 0xFFFFFFFEU);
-    EXPECT_EQ(first.register_value(12), 1U);
-    EXPECT_EQ(second.register_value(10), 11U);
-    EXPECT_EQ(second.register_value(11), 12U);
-    EXPECT_EQ(second.register_value(12), 0U);
+    EXPECT_EQ(first.registers[10], 1U);
+    EXPECT_EQ(first.registers[11], 0xFFFFFFFEU);
+    EXPECT_EQ(first.registers[12], 1U);
+    EXPECT_EQ(second.registers[10], 11U);
+    EXPECT_EQ(second.registers[11], 12U);
+    EXPECT_EQ(second.registers[12], 0U);
 
-    snapshot.set_register_value(10, 100);
+    snapshot.registers[10] = 100;
     step_n(cpu, snapshot, 3);
-    EXPECT_EQ(snapshot.program_counter(), first.program_counter());
-    EXPECT_EQ(snapshot.register_value(10), 101U);
-    EXPECT_EQ(snapshot.register_value(11), first.register_value(11));
-    EXPECT_EQ(snapshot.register_value(12), first.register_value(12));
-    EXPECT_EQ(first.register_value(10), 1U);
+    EXPECT_EQ(snapshot.program_counter, first.program_counter);
+    EXPECT_EQ(snapshot.registers[10], 101U);
+    EXPECT_EQ(snapshot.registers[11], first.registers[11]);
+    EXPECT_EQ(snapshot.registers[12], first.registers[12]);
+    EXPECT_EQ(first.registers[10], 1U);
 }
 
 TEST(CpuTest, ExecutesArithmeticAndLogicalInstructions)
@@ -148,20 +147,20 @@ TEST(CpuTest, ExecutesArithmeticAndLogicalInstructions)
                              0x01097026, // xor   $t6, $t0, $t1
                              0x01097827, // nor   $t7, $t0, $t1
                          });
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
 
     step_n(cpu, state, 9);
 
-    EXPECT_EQ(state.register_value(8), 0x12345678U);
-    EXPECT_EQ(state.register_value(9), 0xFFFFFFFFU);
-    EXPECT_EQ(state.register_value(10), 0x12345677U);
-    EXPECT_EQ(state.register_value(11), 0x12345679U);
-    EXPECT_EQ(state.register_value(12), 0x12345678U);
-    EXPECT_EQ(state.register_value(13), 0xFFFFFFFFU);
-    EXPECT_EQ(state.register_value(14), 0xEDCBA987U);
-    EXPECT_EQ(state.register_value(15), 0U);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 36);
+    EXPECT_EQ(state.registers[8], 0x12345678U);
+    EXPECT_EQ(state.registers[9], 0xFFFFFFFFU);
+    EXPECT_EQ(state.registers[10], 0x12345677U);
+    EXPECT_EQ(state.registers[11], 0x12345679U);
+    EXPECT_EQ(state.registers[12], 0x12345678U);
+    EXPECT_EQ(state.registers[13], 0xFFFFFFFFU);
+    EXPECT_EQ(state.registers[14], 0xEDCBA987U);
+    EXPECT_EQ(state.registers[15], 0U);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 36);
 }
 
 TEST(CpuTest, ExecutesComparisonsAndShifts)
@@ -181,38 +180,41 @@ TEST(CpuTest, ExecutesComparisonsAndShifts)
                              0x3112FFF0, // andi  $s2, $t0, 0xfff0
                              0x3913FFFF, // xori  $s3, $t0, 0xffff
                          });
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
 
     step_n(cpu, state, 12);
 
-    EXPECT_EQ(state.register_value(10), 1U);
-    EXPECT_EQ(state.register_value(11), 0U);
-    EXPECT_EQ(state.register_value(12), 1U);
-    EXPECT_EQ(state.register_value(13), 0U);
-    EXPECT_EQ(state.register_value(14), 1U);
-    EXPECT_EQ(state.register_value(15), 0xFFFFFFFCU);
-    EXPECT_EQ(state.register_value(16), 0x3FFFFFFFU);
-    EXPECT_EQ(state.register_value(17), 0xFFFFFFFFU);
-    EXPECT_EQ(state.register_value(18), 0xFFF0U);
-    EXPECT_EQ(state.register_value(19), 0xFFFF0000U);
+    EXPECT_EQ(state.registers[10], 1U);
+    EXPECT_EQ(state.registers[11], 0U);
+    EXPECT_EQ(state.registers[12], 1U);
+    EXPECT_EQ(state.registers[13], 0U);
+    EXPECT_EQ(state.registers[14], 1U);
+    EXPECT_EQ(state.registers[15], 0xFFFFFFFCU);
+    EXPECT_EQ(state.registers[16], 0x3FFFFFFFU);
+    EXPECT_EQ(state.registers[17], 0xFFFFFFFFU);
+    EXPECT_EQ(state.registers[18], 0xFFF0U);
+    EXPECT_EQ(state.registers[19], 0xFFFF0000U);
 }
 
 TEST(CpuTest, KeepsZeroRegisterConstant)
 {
-    Memory memory(GuestAddress{kProgramBase}, 16);
+    Memory memory(GuestAddress{kProgramBase}, 20);
     load_program(memory, {
+                             0x24080007, // addiu $t0, $zero, 7
                              0x3C00FFFF, // lui   $zero, 0xffff
                              0x24000001, // addiu $zero, $zero, 1
                              0x00000000, // nop
                          });
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
 
-    step_n(cpu, state, 3);
+    state.registers[0] = 99; // Public snapshot data cannot change guest $zero semantics.
+    step_n(cpu, state, 4);
 
-    EXPECT_EQ(state.register_value(0), 0U);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 12);
+    EXPECT_EQ(state.registers[0], 0U);
+    EXPECT_EQ(state.registers[8], 7U);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 16);
 }
 
 TEST(CpuTest, LoadsAndStoresWordsThroughMemory)
@@ -224,29 +226,31 @@ TEST(CpuTest, LoadsAndStoresWordsThroughMemory)
                              0xAD090020, // sw    $t1, 32($t0)
                              0x8D0A0020, // lw    $t2, 32($t0)
                          });
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
 
     step_n(cpu, state, 4);
 
     EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 32}), 0x1234U);
-    EXPECT_EQ(state.register_value(10), 0x1234U);
+    EXPECT_EQ(state.registers[10], 0x1234U);
 }
 
 TEST(CpuTest, RejectsUnsupportedAndMisalignedInstructionsWithoutAdvancing)
 {
     Memory memory(GuestAddress{kProgramBase}, 16);
     load_program(memory, {0xFFFFFFFF});
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
 
     EXPECT_THROW(cpu.step(state), std::runtime_error);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase);
 
     memory.write_u32(GuestAddress{kProgramBase}, 0x8C080001); // lw $t0, 1($zero)
     EXPECT_THROW(cpu.step(state), std::invalid_argument);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase);
-    EXPECT_THROW(CpuState(GuestAddress{kProgramBase + 1}), std::invalid_argument);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase);
+    state.program_counter = GuestAddress{kProgramBase + 1};
+    EXPECT_THROW(cpu.step(state), std::invalid_argument);
+    EXPECT_EQ(state.program_counter, GuestAddress{kProgramBase + 1});
 }
 
 TEST(CpuTest, LoadsAndStoresBytesAndHalfwords)
@@ -262,16 +266,16 @@ TEST(CpuTest, LoadsAndStoresBytesAndHalfwords)
                          });
     memory.write_u32(GuestAddress{kProgramBase + 64}, 0x123480FF);
     memory.write_u32(GuestAddress{kProgramBase + 68}, 0xAABBCCDD);
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
-    state.set_register_value(8, kProgramBase + 64);
-    state.set_register_value(13, 0xABCDEF56);
-    state.set_register_value(14, 0x12347890);
+    state.registers[8] = kProgramBase + 64;
+    state.registers[13] = 0xABCDEF56;
+    state.registers[14] = 0x12347890;
     step_n(cpu, state, 6);
-    EXPECT_EQ(state.register_value(9), 0xFFFFFFFFU);
-    EXPECT_EQ(state.register_value(10), 0xFFU);
-    EXPECT_EQ(state.register_value(11), 0xFFFF80FFU);
-    EXPECT_EQ(state.register_value(12), 0x80FFU);
+    EXPECT_EQ(state.registers[9], 0xFFFFFFFFU);
+    EXPECT_EQ(state.registers[10], 0xFFU);
+    EXPECT_EQ(state.registers[11], 0xFFFF80FFU);
+    EXPECT_EQ(state.registers[12], 0x80FFU);
     EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 64}), 0x125680FFU);
     EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 68}), 0xAABB7890U);
 }
@@ -283,13 +287,13 @@ TEST(CpuTest, RejectsMisalignedHalfwordsAndOutOfBoundsByteAccess)
         SCOPED_TRACE(instruction);
         Memory memory(GuestAddress{kProgramBase}, 64);
         load_program(memory, {instruction});
-        CpuState state(GuestAddress{kProgramBase});
+        CpuState state{.program_counter = GuestAddress{kProgramBase}};
         Cpu cpu(memory);
-        state.set_register_value(8, kProgramBase);
-        state.set_register_value(9, 0x12345678);
+        state.registers[8] = kProgramBase;
+        state.registers[9] = 0x12345678;
         EXPECT_ANY_THROW(cpu.step(state));
-        EXPECT_EQ(state.program_counter(), GuestAddress{kProgramBase});
-        EXPECT_EQ(state.register_value(9), 0x12345678U);
+        EXPECT_EQ(state.program_counter, GuestAddress{kProgramBase});
+        EXPECT_EQ(state.registers[9], 0x12345678U);
         EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase}), instruction);
     }
 }
@@ -298,18 +302,13 @@ TEST(CpuTest, ReportsSyscallsAfterCommittingTheReturnDelaySlot)
 {
     Memory memory(GuestAddress{kProgramBase}, 32);
     load_program(memory, {0x03E00008, (123U << 6) | 0xC}); // jr $ra; syscall 123
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
-    state.set_register_value(31, kProgramBase + 16);
+    state.registers[31] = kProgramBase + 16;
     EXPECT_FALSE(cpu.step(state));
-    EXPECT_EQ(state.program_counter(), GuestAddress{kProgramBase + 4});
+    EXPECT_EQ(state.program_counter, GuestAddress{kProgramBase + 4});
     EXPECT_EQ(cpu.step(state), 123U);
-    EXPECT_EQ(state.program_counter(), GuestAddress{kProgramBase + 16});
-    state.set_register_value(2, 42);
-    EXPECT_EQ(state.register_value(2), 42U);
-    state.set_register_value(0, 99);
-    EXPECT_EQ(state.register_value(0), 0U);
-    EXPECT_THROW(state.set_register_value(32, 1), std::out_of_range);
+    EXPECT_EQ(state.program_counter, GuestAddress{kProgramBase + 16});
 }
 
 TEST(CpuTest, ExecutesEveryIntegerBranchVariant)
@@ -348,24 +347,24 @@ TEST(CpuTest, ExecutesEveryIntegerBranchVariant)
                                      0x240B0001,                            // addiu $t3, $zero, 1 (fallthrough)
                                      0x240C0001,                            // addiu $t4, $zero, 1 (target)
                                  });
-            CpuState state(GuestAddress{kProgramBase});
+            CpuState state{.program_counter = GuestAddress{kProgramBase}};
             Cpu cpu(memory);
             step_n(cpu, state, 3);
 
             const bool skipped = test.likely && !test.taken[index];
-            EXPECT_EQ(state.program_counter().value_of(), kProgramBase + (skipped ? 16 : 12));
-            EXPECT_EQ(state.register_value(31), test.links ? kProgramBase + 16 : 0U);
-            EXPECT_EQ(state.register_value(10), 0U);
+            EXPECT_EQ(state.program_counter.value_of(), kProgramBase + (skipped ? 16 : 12));
+            EXPECT_EQ(state.registers[31], test.links ? kProgramBase + 16 : 0U);
+            EXPECT_EQ(state.registers[10], 0U);
             if (!skipped)
             {
                 cpu.step(state);
-                EXPECT_EQ(state.register_value(10), test.links ? kProgramBase + 17 : 1U);
+                EXPECT_EQ(state.registers[10], test.links ? kProgramBase + 17 : 1U);
             }
-            EXPECT_EQ(state.program_counter().value_of(), kProgramBase + (test.taken[index] ? 20 : 16));
+            EXPECT_EQ(state.program_counter.value_of(), kProgramBase + (test.taken[index] ? 20 : 16));
             cpu.step(state);
-            EXPECT_EQ(state.register_value(11), test.taken[index] ? 0U : 1U);
-            EXPECT_EQ(state.register_value(12), test.taken[index] ? 1U : 0U);
-            EXPECT_EQ(state.program_counter().value_of(), kProgramBase + (test.taken[index] ? 24 : 20));
+            EXPECT_EQ(state.registers[11], test.taken[index] ? 0U : 1U);
+            EXPECT_EQ(state.registers[12], test.taken[index] ? 1U : 0U);
+            EXPECT_EQ(state.program_counter.value_of(), kProgramBase + (test.taken[index] ? 24 : 20));
         }
     }
 }
@@ -379,12 +378,12 @@ TEST(CpuTest, BranchConditionIsEvaluatedBeforeDelaySlot)
                              0x24090001, // addiu $t1, $zero, 1 (skipped)
                              0x00000000,
                          });
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
     step_n(cpu, state, 2);
-    EXPECT_EQ(state.register_value(8), 1U);
-    EXPECT_EQ(state.register_value(9), 0U);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 12);
+    EXPECT_EQ(state.registers[8], 1U);
+    EXPECT_EQ(state.registers[9], 0U);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 12);
 }
 
 TEST(CpuTest, ExecutesBackwardLoopWithDelaySlots)
@@ -396,12 +395,12 @@ TEST(CpuTest, ExecutesBackwardLoopWithDelaySlots)
                              0x1500FFFE, // bne $t0, $zero, base + 4
                              0x25290001, // addiu $t1, $t1, 1 (runs on all three iterations)
                          });
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
     step_n(cpu, state, 10);
-    EXPECT_EQ(state.register_value(8), 0U);
-    EXPECT_EQ(state.register_value(9), 3U);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 16);
+    EXPECT_EQ(state.registers[8], 0U);
+    EXPECT_EQ(state.registers[9], 3U);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 16);
 }
 
 TEST(CpuTest, CallsFunctionAndReturnsAfterBothDelaySlots)
@@ -416,24 +415,24 @@ TEST(CpuTest, CallsFunctionAndReturnsAfterBothDelaySlots)
                              0x03E00008, // jr $ra
                              0x24420002, // addiu $v0, $v0, 2 (return delay slot)
                          });
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
     cpu.step(state);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 4);
-    EXPECT_EQ(state.register_value(31), kProgramBase + 8);
-    EXPECT_EQ(state.register_value(4), 0U);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 4);
+    EXPECT_EQ(state.registers[31], kProgramBase + 8);
+    EXPECT_EQ(state.registers[4], 0U);
     cpu.step(state);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 16);
-    EXPECT_EQ(state.register_value(4), 7U);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 16);
+    EXPECT_EQ(state.registers[4], 7U);
     step_n(cpu, state, 2);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 24);
-    EXPECT_EQ(state.register_value(2), 8U);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 24);
+    EXPECT_EQ(state.registers[2], 8U);
     cpu.step(state);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 8);
-    EXPECT_EQ(state.register_value(2), 10U);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 8);
+    EXPECT_EQ(state.registers[2], 10U);
     cpu.step(state);
-    EXPECT_EQ(state.register_value(11), 10U);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 12);
+    EXPECT_EQ(state.registers[11], 10U);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 12);
 }
 
 TEST(CpuTest, JalrCapturesTargetBeforeWritingAnyLinkRegister)
@@ -452,17 +451,17 @@ TEST(CpuTest, JalrCapturesTargetBeforeWritingAnyLinkRegister)
                                  0xFFFFFFFF,
                                  0x240B0007, // addiu $t3, $zero, 7
                              });
-        CpuState state(GuestAddress{kProgramBase});
+        CpuState state{.program_counter = GuestAddress{kProgramBase}};
         Cpu cpu(memory);
         step_n(cpu, state, 3);
-        EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 12);
-        EXPECT_EQ(state.register_value(destination), destination == 0 ? 0U : kProgramBase + 16);
-        EXPECT_EQ(state.register_value(31), 0U);
+        EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 12);
+        EXPECT_EQ(state.registers[destination], destination == 0 ? 0U : kProgramBase + 16);
+        EXPECT_EQ(state.registers[31], 0U);
         cpu.step(state);
-        EXPECT_EQ(state.register_value(10), kProgramBase + (destination == 8 ? 16 : 24));
-        EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 24);
+        EXPECT_EQ(state.registers[10], kProgramBase + (destination == 8 ? 16 : 24));
+        EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 24);
         cpu.step(state);
-        EXPECT_EQ(state.register_value(11), 7U);
+        EXPECT_EQ(state.registers[11], 7U);
     }
 }
 
@@ -473,16 +472,16 @@ TEST(CpuTest, JumpUsesUpperBitsOfPcPlusFour)
     memory.write_u32(GuestAddress{0x0FFFFFFC}, 0x08000001); // j 0x10000004
     memory.write_u32(GuestAddress{0x10000000}, 0x24080001); // delay slot
     memory.write_u32(GuestAddress{0x10000004}, 0x24090002);
-    CpuState state(GuestAddress{0x0FFFFFFC});
+    CpuState state{.program_counter = GuestAddress{0x0FFFFFFC}};
     Cpu cpu(memory);
     cpu.step(state);
-    EXPECT_EQ(state.program_counter().value_of(), 0x10000000U);
+    EXPECT_EQ(state.program_counter.value_of(), 0x10000000U);
     cpu.step(state);
-    EXPECT_EQ(state.program_counter().value_of(), 0x10000004U);
-    EXPECT_EQ(state.register_value(8), 1U);
-    EXPECT_EQ(state.register_value(31), 0U);
+    EXPECT_EQ(state.program_counter.value_of(), 0x10000004U);
+    EXPECT_EQ(state.registers[8], 1U);
+    EXPECT_EQ(state.registers[31], 0U);
     cpu.step(state);
-    EXPECT_EQ(state.register_value(9), 2U);
+    EXPECT_EQ(state.registers[9], 2U);
 }
 
 TEST(CpuTest, UntakenLikelyBranchDoesNotExecuteInvalidDelaySlot)
@@ -493,32 +492,33 @@ TEST(CpuTest, UntakenLikelyBranchDoesNotExecuteInvalidDelaySlot)
                              0xFFFFFFFF, // invalid delay slot must not be decoded
                              0x24080001,
                          });
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
     cpu.step(state);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 8);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 8);
     cpu.step(state);
-    EXPECT_EQ(state.register_value(8), 1U);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 12);
+    EXPECT_EQ(state.registers[8], 1U);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 12);
 }
 
 TEST(CpuTest, FailedDelaySlotPreservesPendingBranchForRetry)
 {
     Memory memory(GuestAddress{kProgramBase}, 20);
     load_program(memory, {0x10000002, 0xFFFFFFFF, 0xFFFFFFFF, 0x24080007});
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
     cpu.step(state);
+    const auto pending = state;
     EXPECT_THROW(cpu.step(state), std::runtime_error);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 4);
+    EXPECT_EQ(state, pending);
     memory.write_u32(GuestAddress{kProgramBase + 4}, 0x8C080001); // misaligned lw
     EXPECT_THROW(cpu.step(state), std::invalid_argument);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 4);
+    EXPECT_EQ(state, pending);
     memory.write_u32(GuestAddress{kProgramBase + 4}, 0x00000000); // repair delay slot
     cpu.step(state);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 12);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 12);
     cpu.step(state);
-    EXPECT_EQ(state.register_value(8), 7U);
+    EXPECT_EQ(state.registers[8], 7U);
 }
 
 TEST(CpuTest, MisalignedRegisterJumpFaultsAfterExecutingDelaySlot)
@@ -530,27 +530,27 @@ TEST(CpuTest, MisalignedRegisterJumpFaultsAfterExecutingDelaySlot)
                              0x01000008, // jr $t0
                              0x24090007,
                          });
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
     step_n(cpu, state, 4);
-    EXPECT_EQ(state.register_value(9), 7U);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 1);
+    EXPECT_EQ(state.registers[9], 7U);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 1);
     EXPECT_THROW(cpu.step(state), std::invalid_argument);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 1);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 1);
 }
 
 TEST(CpuTest, RejectsUnknownRegimmWithoutChangingControlFlow)
 {
     Memory memory(GuestAddress{kProgramBase}, 16);
     load_program(memory, {0x041F0001}); // unsupported REGIMM operation
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
     EXPECT_THROW(cpu.step(state), std::runtime_error);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase);
-    EXPECT_EQ(state.register_value(31), 0U);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase);
+    EXPECT_EQ(state.registers[31], 0U);
     memory.write_u32(GuestAddress{kProgramBase}, 0x00000000);
     step_n(cpu, state, 2);
-    EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 8);
+    EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 8);
 }
 
 TEST(CpuTest, ExecutesVariableShiftsAndRotationsWithMaskedCounts)
@@ -654,11 +654,11 @@ TEST(CpuTest, MovesHiLoIndependentlyAndStartsThemAtZero)
 {
     Memory memory(GuestAddress{kProgramBase}, 32);
     load_program(memory, {0x00004010, 0x00004812}); // mfhi $t0; mflo $t1
-    CpuState state(GuestAddress{kProgramBase});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
     step_n(cpu, state, 2);
-    EXPECT_EQ(state.register_value(8), 0U);
-    EXPECT_EQ(state.register_value(9), 0U);
+    EXPECT_EQ(state.registers[8], 0U);
+    EXPECT_EQ(state.registers[9], 0U);
 
     const auto high = run_alu(0x01000011, 0x12345678, 0, {.accumulator = 0xABCDEF0198765432ULL}); // mthi
     EXPECT_EQ(high.high, 0x12345678U);
@@ -799,15 +799,15 @@ TEST(CpuTest, RejectsInvalidAluEncodingsWithoutAdvancing)
         SCOPED_TRACE(instruction);
         Memory memory(GuestAddress{kProgramBase}, 16);
         load_program(memory, {instruction});
-        CpuState state(GuestAddress{kProgramBase});
+        CpuState state{.program_counter = GuestAddress{kProgramBase}};
         Cpu cpu(memory);
         EXPECT_THROW(cpu.step(state), std::exception);
-        EXPECT_EQ(state.program_counter().value_of(), kProgramBase);
-        EXPECT_EQ(state.register_value(9), 0U);
-        EXPECT_EQ(state.register_value(10), 0U);
+        EXPECT_EQ(state.program_counter.value_of(), kProgramBase);
+        EXPECT_EQ(state.registers[9], 0U);
+        EXPECT_EQ(state.registers[10], 0U);
         memory.write_u32(GuestAddress{kProgramBase}, 0x00000000);
         step_n(cpu, state, 2);
-        EXPECT_EQ(state.program_counter().value_of(), kProgramBase + 8);
+        EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 8);
     }
 }
 

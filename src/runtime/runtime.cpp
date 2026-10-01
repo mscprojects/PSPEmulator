@@ -77,9 +77,9 @@ Runtime::Runtime(const ParsedPrx &prx, const ExecutionOptions &options)
     }
     const auto argument_address = initial.stack + initial.stack_size - static_cast<std::uint32_t>(arguments.size());
     loaded_.memory.write_bytes(GuestAddress{argument_address}, arguments);
-    initial.state.set_register_value(4, static_cast<std::uint32_t>(arguments.size()));
-    initial.state.set_register_value(5, argument_address);
-    initial.state.set_register_value(29, (argument_address & ~15U) - 64);
+    initial.state.registers[4] = static_cast<std::uint32_t>(arguments.size());
+    initial.state.registers[5] = argument_address;
+    initial.state.registers[29] = (argument_address & ~15U) - 64;
 }
 
 ExecutionResult Runtime::run()
@@ -88,19 +88,19 @@ ExecutionResult Runtime::run()
     {
         auto &thread = threads_.at(current_thread_);
         auto &state = thread.state;
-        if (state.program_counter().value_of() == return_address_ || thread.finished)
+        if (state.program_counter.value_of() == return_address_ || thread.finished)
         {
             thread.finished = true;
             if (ready_.empty())
             {
-                exit_code_ = std::bit_cast<std::int32_t>(state.register_value(2));
+                exit_code_ = std::bit_cast<std::int32_t>(state.registers[2]);
                 break;
             }
             current_thread_ = ready_.front();
             ready_.pop_front();
             continue;
         }
-        const auto pc = state.program_counter();
+        const auto pc = state.program_counter;
         try
         {
             if (instructions_ == options_.max_instructions)
@@ -116,7 +116,7 @@ ExecutionResult Runtime::run()
                 {
                     throw std::runtime_error("Unbound syscall " + hexadecimal(*syscall));
                 }
-                state.set_register_value(2, service(state, binding->second));
+                state.registers[2] = service(state, binding->second);
             }
         }
         catch (const std::exception &error)
@@ -163,10 +163,10 @@ std::uint32_t Runtime::create_thread(GuestAddress entry, std::uint32_t stack_siz
         throw std::runtime_error("Thread stack must contain at least 512 bytes");
     }
     const auto stack = allocate(stack_size, true);
-    CpuState state(entry);
-    state.set_register_value(28, loaded_.module.global_pointer.value_of());
-    state.set_register_value(29, static_cast<std::uint32_t>(static_cast<std::uint64_t>(stack) + stack_size - 64));
-    state.set_register_value(31, return_address_);
+    CpuState state{.program_counter = entry};
+    state.registers[28] = loaded_.module.global_pointer.value_of();
+    state.registers[29] = static_cast<std::uint32_t>(static_cast<std::uint64_t>(stack) + stack_size - 64);
+    state.registers[31] = return_address_;
     const auto id = next_id_++;
     threads_.emplace(id, Thread{state, stack, stack_size, priority});
     return id;
@@ -179,7 +179,7 @@ std::uint32_t Runtime::argument(const CpuState &state, std::size_t index) const
     {
         throw std::logic_error("Unsupported service argument index");
     }
-    return state.register_value(4 + index);
+    return state.registers[4 + index];
 }
 
 std::string Runtime::read_string(std::uint32_t address) const
@@ -242,9 +242,9 @@ std::uint32_t Runtime::service(CpuState &state, const ImportBinding &binding)
                 loaded_.memory.write_u8(GuestAddress{address + static_cast<std::uint32_t>(index)},
                                         static_cast<std::uint8_t>(bytes[index]));
             }
-            thread.state.set_register_value(4, arg(1));
-            thread.state.set_register_value(5, address);
-            thread.state.set_register_value(29, (address & ~15U) - 64);
+            thread.state.registers[4] = arg(1);
+            thread.state.registers[5] = address;
+            thread.state.registers[29] = (address & ~15U) - 64;
             thread.started = true;
             ready_.push_back(arg(0));
             return 0;
@@ -255,7 +255,7 @@ std::uint32_t Runtime::service(CpuState &state, const ImportBinding &binding)
         case 0x94AA61EE: // sceKernelGetThreadCurrentPriority
             return threads_.at(current_thread_).priority;
         case 0x82BC5777: // sceKernelGetSystemTimeWide: deterministic logical time.
-            state.set_register_value(3, static_cast<std::uint32_t>(instructions_ >> 32));
+            state.registers[3] = static_cast<std::uint32_t>(instructions_ >> 32);
             return static_cast<std::uint32_t>(instructions_);
         default:
             break;

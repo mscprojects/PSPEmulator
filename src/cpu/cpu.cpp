@@ -39,13 +39,15 @@ Cpu::Cpu(Memory &memory) : memory_(memory)
 
 std::optional<std::uint32_t> Cpu::step(CpuState &state)
 {
-    if ((state.program_counter().value_of() & kWordAlignmentMask) != 0)
+    if ((state.program_counter.value_of() & kWordAlignmentMask) != 0)
     {
         throw std::invalid_argument("Instruction address must be word aligned");
     }
-    const auto instruction = memory_.read_u32(state.program_counter());
-    ControlFlow flow{state.next_program_counter(),
-                     GuestAddress{state.next_program_counter().value_of() + kInstructionSize}};
+    const auto instruction = memory_.read_u32(state.program_counter);
+    // A caller may edit a saved state directly; $zero is always zero for operands.
+    state.registers[0] = 0;
+    ControlFlow flow{state.next_program_counter,
+                     GuestAddress{state.next_program_counter.value_of() + kInstructionSize}};
     std::optional<std::uint32_t> syscall;
     if ((instruction & 0xFC00003FU) == 0x0000000CU)
     {
@@ -55,7 +57,8 @@ std::optional<std::uint32_t> Cpu::step(CpuState &state)
     {
         execute(state, instruction, flow);
     }
-    state.set_instruction_addresses({flow.next_instruction, flow.following_instruction});
+    state.program_counter = flow.next_instruction;
+    state.next_program_counter = flow.following_instruction;
     return syscall;
 }
 
@@ -86,58 +89,58 @@ void Cpu::execute(CpuState &state, std::uint32_t instruction, ControlFlow &flow)
     case 0x03: // JAL
         flow.following_instruction = jump_address(state, instruction);
         // Return after the delay slot; the link is already visible inside that slot.
-        state.set_register_value(kReturnAddressRegister, state.program_counter().value_of() + kAfterDelaySlotOffset);
+        write_register(state, kReturnAddressRegister, state.program_counter.value_of() + kAfterDelaySlotOffset);
         break;
     case 0x04: // BEQ
-        if (state.register_value(source) == state.register_value(target))
+        if (state.registers[source] == state.registers[target])
         {
             flow.following_instruction = branch_address(state, instruction);
         }
         break;
     case 0x05: // BNE
-        if (state.register_value(source) != state.register_value(target))
+        if (state.registers[source] != state.registers[target])
         {
             flow.following_instruction = branch_address(state, instruction);
         }
         break;
     case 0x06: // BLEZ
-        if (std::bit_cast<std::int32_t>(state.register_value(source)) <= 0)
+        if (std::bit_cast<std::int32_t>(state.registers[source]) <= 0)
         {
             flow.following_instruction = branch_address(state, instruction);
         }
         break;
     case 0x07: // BGTZ
-        if (std::bit_cast<std::int32_t>(state.register_value(source)) > 0)
+        if (std::bit_cast<std::int32_t>(state.registers[source]) > 0)
         {
             flow.following_instruction = branch_address(state, instruction);
         }
         break;
     case 0x09: // ADDIU
         // The immediate is sign-extended; unsigned addition wraps without an overflow trap.
-        state.set_register_value(target, state.register_value(source) + static_cast<std::uint32_t>(signed_immediate));
+        write_register(state, target, state.registers[source] + static_cast<std::uint32_t>(signed_immediate));
         break;
     case 0x0A: // SLTI
-        state.set_register_value(target, std::bit_cast<std::int32_t>(state.register_value(source)) < signed_immediate);
+        write_register(state, target, std::bit_cast<std::int32_t>(state.registers[source]) < signed_immediate);
         break;
     case 0x0B: // SLTIU
         // Even for an unsigned comparison, the immediate is sign-extended first.
-        state.set_register_value(target, state.register_value(source) < static_cast<std::uint32_t>(signed_immediate));
+        write_register(state, target, state.registers[source] < static_cast<std::uint32_t>(signed_immediate));
         break;
     case 0x0C: // ANDI
         // Logical immediates (ANDI, ORI, XORI) are zero-extended instead.
-        state.set_register_value(target, state.register_value(source) & immediate);
+        write_register(state, target, state.registers[source] & immediate);
         break;
     case 0x0D: // ORI
-        state.set_register_value(target, state.register_value(source) | immediate);
+        write_register(state, target, state.registers[source] | immediate);
         break;
     case 0x0E: // XORI
-        state.set_register_value(target, state.register_value(source) ^ immediate);
+        write_register(state, target, state.registers[source] ^ immediate);
         break;
     case 0x0F: // LUI
-        state.set_register_value(target, static_cast<std::uint32_t>(immediate) << 16);
+        write_register(state, target, static_cast<std::uint32_t>(immediate) << 16);
         break;
     case 0x14: // BEQL
-        if (state.register_value(source) == state.register_value(target))
+        if (state.registers[source] == state.registers[target])
         {
             flow.following_instruction = branch_address(state, instruction);
         }
@@ -147,7 +150,7 @@ void Cpu::execute(CpuState &state, std::uint32_t instruction, ControlFlow &flow)
         }
         break;
     case 0x15: // BNEL
-        if (state.register_value(source) != state.register_value(target))
+        if (state.registers[source] != state.registers[target])
         {
             flow.following_instruction = branch_address(state, instruction);
         }
@@ -157,7 +160,7 @@ void Cpu::execute(CpuState &state, std::uint32_t instruction, ControlFlow &flow)
         }
         break;
     case 0x16: // BLEZL
-        if (std::bit_cast<std::int32_t>(state.register_value(source)) <= 0)
+        if (std::bit_cast<std::int32_t>(state.registers[source]) <= 0)
         {
             flow.following_instruction = branch_address(state, instruction);
         }
@@ -167,7 +170,7 @@ void Cpu::execute(CpuState &state, std::uint32_t instruction, ControlFlow &flow)
         }
         break;
     case 0x17: // BGTZL
-        if (std::bit_cast<std::int32_t>(state.register_value(source)) > 0)
+        if (std::bit_cast<std::int32_t>(state.registers[source]) > 0)
         {
             flow.following_instruction = branch_address(state, instruction);
         }
@@ -180,32 +183,34 @@ void Cpu::execute(CpuState &state, std::uint32_t instruction, ControlFlow &flow)
         execute_special3(state, instruction);
         break;
     case 0x20: // LB
-        state.set_register_value(target, static_cast<std::uint32_t>(std::bit_cast<std::int8_t>(
-                                             memory_.read_u8(data_address(state, instruction, DataAlignment::Byte)))));
+        write_register(state, target,
+                       static_cast<std::uint32_t>(std::bit_cast<std::int8_t>(
+                           memory_.read_u8(data_address(state, instruction, DataAlignment::Byte)))));
         break;
     case 0x21: // LH
-        state.set_register_value(target, static_cast<std::uint32_t>(std::bit_cast<std::int16_t>(memory_.read_u16(
-                                             data_address(state, instruction, DataAlignment::Halfword)))));
+        write_register(state, target,
+                       static_cast<std::uint32_t>(std::bit_cast<std::int16_t>(
+                           memory_.read_u16(data_address(state, instruction, DataAlignment::Halfword)))));
         break;
     case 0x23: // LW
-        state.set_register_value(target, memory_.read_u32(data_address(state, instruction, DataAlignment::Word)));
+        write_register(state, target, memory_.read_u32(data_address(state, instruction, DataAlignment::Word)));
         break;
     case 0x24: // LBU
-        state.set_register_value(target, memory_.read_u8(data_address(state, instruction, DataAlignment::Byte)));
+        write_register(state, target, memory_.read_u8(data_address(state, instruction, DataAlignment::Byte)));
         break;
     case 0x25: // LHU
-        state.set_register_value(target, memory_.read_u16(data_address(state, instruction, DataAlignment::Halfword)));
+        write_register(state, target, memory_.read_u16(data_address(state, instruction, DataAlignment::Halfword)));
         break;
     case 0x28: // SB
         memory_.write_u8(data_address(state, instruction, DataAlignment::Byte),
-                         static_cast<std::uint8_t>(state.register_value(target)));
+                         static_cast<std::uint8_t>(state.registers[target]));
         break;
     case 0x29: // SH
         memory_.write_u16(data_address(state, instruction, DataAlignment::Halfword),
-                          static_cast<std::uint16_t>(state.register_value(target)));
+                          static_cast<std::uint16_t>(state.registers[target]));
         break;
     case 0x2B: // SW
-        memory_.write_u32(data_address(state, instruction, DataAlignment::Word), state.register_value(target));
+        memory_.write_u32(data_address(state, instruction, DataAlignment::Word), state.registers[target]);
         break;
     default:
         throw std::runtime_error("Unsupported Allegrex instruction");
@@ -222,16 +227,16 @@ void Cpu::execute_special(CpuState &state, std::uint32_t instruction, ControlFlo
     switch (instruction & 0b111111U) // funct: bits 5-0
     {
     case 0x00: // SLL (also NOP)
-        state.set_register_value(destination, state.register_value(target) << shift);
+        write_register(state, destination, state.registers[target] << shift);
         break;
     case 0x02: // SRL / ROTR: rs is an operation selector here.
         if (source == 0)
         {
-            state.set_register_value(destination, state.register_value(target) >> shift);
+            write_register(state, destination, state.registers[target] >> shift);
         }
         else if (source == 1)
         {
-            state.set_register_value(destination, std::rotr(state.register_value(target), static_cast<int>(shift)));
+            write_register(state, destination, std::rotr(state.registers[target], static_cast<int>(shift)));
         }
         else
         {
@@ -239,24 +244,22 @@ void Cpu::execute_special(CpuState &state, std::uint32_t instruction, ControlFlo
         }
         break;
     case 0x03: // SRA
-        state.set_register_value(destination, std::bit_cast<std::uint32_t>(
-                                                  std::bit_cast<std::int32_t>(state.register_value(target)) >> shift));
+        write_register(state, destination,
+                       std::bit_cast<std::uint32_t>(std::bit_cast<std::int32_t>(state.registers[target]) >> shift));
         break;
     case 0x04: // SLLV: variable shifts use only the low five count bits.
-        state.set_register_value(destination, state.register_value(target)
-                                                  << (state.register_value(source) & kShiftCountMask));
+        write_register(state, destination, state.registers[target] << (state.registers[source] & kShiftCountMask));
         break;
     case 0x06: // SRLV / ROTRV: shamt selects shift or rotate.
         if (shift == 0)
         {
-            state.set_register_value(destination,
-                                     state.register_value(target) >> (state.register_value(source) & kShiftCountMask));
+            write_register(state, destination, state.registers[target] >> (state.registers[source] & kShiftCountMask));
         }
         else if (shift == 1)
         {
-            state.set_register_value(destination,
-                                     std::rotr(state.register_value(target),
-                                               static_cast<int>(state.register_value(source) & kShiftCountMask)));
+            write_register(
+                state, destination,
+                std::rotr(state.registers[target], static_cast<int>(state.registers[source] & kShiftCountMask)));
         }
         else
         {
@@ -264,142 +267,138 @@ void Cpu::execute_special(CpuState &state, std::uint32_t instruction, ControlFlo
         }
         break;
     case 0x07: // SRAV
-        state.set_register_value(destination,
-                                 static_cast<std::uint32_t>(std::bit_cast<std::int32_t>(state.register_value(target)) >>
-                                                            (state.register_value(source) & kShiftCountMask)));
+        write_register(state, destination,
+                       static_cast<std::uint32_t>(std::bit_cast<std::int32_t>(state.registers[target]) >>
+                                                  (state.registers[source] & kShiftCountMask)));
         break;
     case 0x08: // JR
-        flow.following_instruction = GuestAddress{state.register_value(source)};
+        flow.following_instruction = GuestAddress{state.registers[source]};
         break;
     case 0x09: // JALR
         // Capture rs before writing rd, which may be the same register.
-        flow.following_instruction = GuestAddress{state.register_value(source)};
-        state.set_register_value(destination, state.program_counter().value_of() + kAfterDelaySlotOffset);
+        flow.following_instruction = GuestAddress{state.registers[source]};
+        write_register(state, destination, state.program_counter.value_of() + kAfterDelaySlotOffset);
         break;
     case 0x0A: // MOVZ
-        if (state.register_value(target) == 0)
+        if (state.registers[target] == 0)
         {
-            state.set_register_value(destination, state.register_value(source));
+            write_register(state, destination, state.registers[source]);
         }
         break;
     case 0x0B: // MOVN
-        if (state.register_value(target) != 0)
+        if (state.registers[target] != 0)
         {
-            state.set_register_value(destination, state.register_value(source));
+            write_register(state, destination, state.registers[source]);
         }
         break;
     case 0x10: // MFHI
-        state.set_register_value(destination, state.high_register_value());
+        write_register(state, destination, state.high_register);
         break;
     case 0x11: // MTHI
-        state.set_high_register_value(state.register_value(source));
+        state.high_register = state.registers[source];
         break;
     case 0x12: // MFLO
-        state.set_register_value(destination, state.low_register_value());
+        write_register(state, destination, state.low_register);
         break;
     case 0x13: // MTLO
-        state.set_low_register_value(state.register_value(source));
+        state.low_register = state.registers[source];
         break;
     case 0x16: // CLZ (Allegrex uses SPECIAL, rather than generic MIPS32 SPECIAL2).
-        state.set_register_value(destination,
-                                 static_cast<std::uint32_t>(std::countl_zero(state.register_value(source))));
+        write_register(state, destination, static_cast<std::uint32_t>(std::countl_zero(state.registers[source])));
         break;
     case 0x17: // CLO
-        state.set_register_value(destination,
-                                 static_cast<std::uint32_t>(std::countl_one(state.register_value(source))));
+        write_register(state, destination, static_cast<std::uint32_t>(std::countl_one(state.registers[source])));
         break;
     case 0x18: // MULT
-        state.set_hi_lo_value(signed_product(state.register_value(source), state.register_value(target)));
+        write_hi_lo(state, signed_product(state.registers[source], state.registers[target]));
         break;
     case 0x19: // MULTU
-        state.set_hi_lo_value(static_cast<std::uint64_t>(state.register_value(source)) * state.register_value(target));
+        write_hi_lo(state, static_cast<std::uint64_t>(state.registers[source]) * state.registers[target]);
         break;
     case 0x1A: // DIV
     {
-        const auto numerator = std::bit_cast<std::int32_t>(state.register_value(source));
-        const auto denominator = std::bit_cast<std::int32_t>(state.register_value(target));
+        const auto numerator = std::bit_cast<std::int32_t>(state.registers[source]);
+        const auto denominator = std::bit_cast<std::int32_t>(state.registers[target]);
         // Handle Allegrex's special results before host division, which would be undefined.
         if (denominator == 0)
         {
-            state.set_low_register_value(numerator < 0 ? 1U : 0xFFFFFFFFU);
-            state.set_high_register_value(state.register_value(source));
+            state.low_register = numerator < 0 ? 1U : 0xFFFFFFFFU;
+            state.high_register = state.registers[source];
         }
         else if (numerator == std::numeric_limits<std::int32_t>::min() && denominator == -1)
         {
-            state.set_low_register_value(state.register_value(source));
-            state.set_high_register_value(0);
+            state.low_register = state.registers[source];
+            state.high_register = 0;
         }
         else
         {
-            state.set_low_register_value(static_cast<std::uint32_t>(numerator / denominator));
-            state.set_high_register_value(static_cast<std::uint32_t>(numerator % denominator));
+            state.low_register = static_cast<std::uint32_t>(numerator / denominator);
+            state.high_register = static_cast<std::uint32_t>(numerator % denominator);
         }
         break;
     }
     case 0x1B: // DIVU
-        if (state.register_value(target) == 0)
+        if (state.registers[target] == 0)
         {
             // Hardware returns a 16-bit quotient for small numerators; see cpu_div.expected.
-            state.set_low_register_value(state.register_value(source) <= kLowHalfwordMask ? kLowHalfwordMask
-                                                                                          : 0xFFFFFFFFU);
-            state.set_high_register_value(state.register_value(source));
+            state.low_register = state.registers[source] <= kLowHalfwordMask ? kLowHalfwordMask : 0xFFFFFFFFU;
+            state.high_register = state.registers[source];
         }
         else
         {
-            state.set_low_register_value(state.register_value(source) / state.register_value(target));
-            state.set_high_register_value(state.register_value(source) % state.register_value(target));
+            state.low_register = state.registers[source] / state.registers[target];
+            state.high_register = state.registers[source] % state.registers[target];
         }
         break;
     case 0x1C: // MADD (Allegrex SPECIAL encoding)
-        state.set_hi_lo_value(state.hi_lo_value() +
-                              signed_product(state.register_value(source), state.register_value(target)));
+        write_hi_lo(state, hi_lo_value(state) + signed_product(state.registers[source], state.registers[target]));
         break;
     case 0x1D: // MADDU
-        state.set_hi_lo_value(state.hi_lo_value() +
-                              static_cast<std::uint64_t>(state.register_value(source)) * state.register_value(target));
+        write_hi_lo(state,
+                    hi_lo_value(state) + static_cast<std::uint64_t>(state.registers[source]) * state.registers[target]);
         break;
     case 0x21: // ADDU
-        state.set_register_value(destination, state.register_value(source) + state.register_value(target));
+        write_register(state, destination, state.registers[source] + state.registers[target]);
         break;
     case 0x23: // SUBU
-        state.set_register_value(destination, state.register_value(source) - state.register_value(target));
+        write_register(state, destination, state.registers[source] - state.registers[target]);
         break;
     case 0x24: // AND
-        state.set_register_value(destination, state.register_value(source) & state.register_value(target));
+        write_register(state, destination, state.registers[source] & state.registers[target]);
         break;
     case 0x25: // OR
-        state.set_register_value(destination, state.register_value(source) | state.register_value(target));
+        write_register(state, destination, state.registers[source] | state.registers[target]);
         break;
     case 0x26: // XOR
-        state.set_register_value(destination, state.register_value(source) ^ state.register_value(target));
+        write_register(state, destination, state.registers[source] ^ state.registers[target]);
         break;
     case 0x27: // NOR
-        state.set_register_value(destination, ~(state.register_value(source) | state.register_value(target)));
+        write_register(state, destination, ~(state.registers[source] | state.registers[target]));
         break;
     case 0x2A: // SLT
-        state.set_register_value(destination, std::bit_cast<std::int32_t>(state.register_value(source)) <
-                                                  std::bit_cast<std::int32_t>(state.register_value(target)));
+        write_register(state, destination,
+                       std::bit_cast<std::int32_t>(state.registers[source]) <
+                           std::bit_cast<std::int32_t>(state.registers[target]));
         break;
     case 0x2B: // SLTU
-        state.set_register_value(destination, state.register_value(source) < state.register_value(target));
+        write_register(state, destination, state.registers[source] < state.registers[target]);
         break;
     case 0x2C: // MAX: operands are signed.
-        state.set_register_value(destination, static_cast<std::uint32_t>(
-                                                  std::max(std::bit_cast<std::int32_t>(state.register_value(source)),
-                                                           std::bit_cast<std::int32_t>(state.register_value(target)))));
+        write_register(state, destination,
+                       static_cast<std::uint32_t>(std::max(std::bit_cast<std::int32_t>(state.registers[source]),
+                                                           std::bit_cast<std::int32_t>(state.registers[target]))));
         break;
     case 0x2D: // MIN
-        state.set_register_value(destination, static_cast<std::uint32_t>(
-                                                  std::min(std::bit_cast<std::int32_t>(state.register_value(source)),
-                                                           std::bit_cast<std::int32_t>(state.register_value(target)))));
+        write_register(state, destination,
+                       static_cast<std::uint32_t>(std::min(std::bit_cast<std::int32_t>(state.registers[source]),
+                                                           std::bit_cast<std::int32_t>(state.registers[target]))));
         break;
     case 0x2E: // MSUB
-        state.set_hi_lo_value(state.hi_lo_value() -
-                              signed_product(state.register_value(source), state.register_value(target)));
+        write_hi_lo(state, hi_lo_value(state) - signed_product(state.registers[source], state.registers[target]));
         break;
     case 0x2F: // MSUBU
-        state.set_hi_lo_value(state.hi_lo_value() -
-                              static_cast<std::uint64_t>(state.register_value(source)) * state.register_value(target));
+        write_hi_lo(state,
+                    hi_lo_value(state) - static_cast<std::uint64_t>(state.registers[source]) * state.registers[target]);
         break;
     default:
         throw std::runtime_error("Unsupported Allegrex instruction");
@@ -424,7 +423,7 @@ void Cpu::execute_special3(CpuState &state, std::uint32_t instruction)
         }
         // A 64-bit mask permits a full 32-bit field without shifting a word by 32.
         const auto mask = static_cast<std::uint32_t>((std::uint64_t{1} << width) - 1);
-        state.set_register_value(target, (state.register_value(source) >> position) & mask);
+        write_register(state, target, (state.registers[source] >> position) & mask);
         break;
     }
     case 0x04: // INS: rd encodes the highest destination bit, rather than width.
@@ -435,39 +434,42 @@ void Cpu::execute_special3(CpuState &state, std::uint32_t instruction)
         }
         const auto width = destination - position + 1;
         const auto mask = static_cast<std::uint32_t>((std::uint64_t{1} << width) - 1) << position;
-        state.set_register_value(target, (state.register_value(target) & ~mask) |
-                                             ((state.register_value(source) << position) & mask));
+        write_register(state, target,
+                       (state.registers[target] & ~mask) | ((state.registers[source] << position) & mask));
         break;
     }
     case 0x20: // BSHFL: shamt selects the byte/bit operation.
         switch (position)
         {
         case 0x02: // WSBH
-            state.set_register_value(destination, ((state.register_value(target) & kOddByteMask) >> 8) |
-                                                      ((state.register_value(target) & kEvenByteMask) << 8));
+            write_register(state, destination,
+                           ((state.registers[target] & kOddByteMask) >> 8) |
+                               ((state.registers[target] & kEvenByteMask) << 8));
             break;
         case 0x03: // WSBW
-            state.set_register_value(destination, std::byteswap(state.register_value(target)));
+            write_register(state, destination, std::byteswap(state.registers[target]));
             break;
         case 0x10: // SEB
-            state.set_register_value(destination, static_cast<std::uint32_t>(std::bit_cast<std::int8_t>(
-                                                      static_cast<std::uint8_t>(state.register_value(target)))));
+            write_register(state, destination,
+                           static_cast<std::uint32_t>(
+                               std::bit_cast<std::int8_t>(static_cast<std::uint8_t>(state.registers[target]))));
             break;
         case 0x14: // BITREV
         {
-            auto value = state.register_value(target);
+            auto value = state.registers[target];
             std::uint32_t result = 0;
             for (unsigned bit = 0; bit < kRegisterBits; ++bit)
             {
                 result = (result << 1) | (value & 1U);
                 value >>= 1;
             }
-            state.set_register_value(destination, result);
+            write_register(state, destination, result);
             break;
         }
         case 0x18: // SEH
-            state.set_register_value(destination, static_cast<std::uint32_t>(std::bit_cast<std::int16_t>(
-                                                      static_cast<std::uint16_t>(state.register_value(target)))));
+            write_register(state, destination,
+                           static_cast<std::uint32_t>(
+                               std::bit_cast<std::int16_t>(static_cast<std::uint16_t>(state.registers[target]))));
             break;
         default:
             throw std::runtime_error("Unsupported Allegrex instruction");
@@ -482,7 +484,7 @@ void Cpu::execute_regimm(CpuState &state, std::uint32_t instruction, ControlFlow
 {
     const auto source = (instruction >> 21) & 0b11111U;
     const auto operation = (instruction >> 16) & 0b11111U;
-    const auto value = std::bit_cast<std::int32_t>(state.register_value(source));
+    const auto value = std::bit_cast<std::int32_t>(state.registers[source]);
 
     switch (operation)
     {
@@ -523,14 +525,14 @@ void Cpu::execute_regimm(CpuState &state, std::uint32_t instruction, ControlFlow
         {
             flow.following_instruction = branch_address(state, instruction);
         }
-        state.set_register_value(kReturnAddressRegister, state.program_counter().value_of() + kAfterDelaySlotOffset);
+        write_register(state, kReturnAddressRegister, state.program_counter.value_of() + kAfterDelaySlotOffset);
         break;
     case 0x11: // BGEZAL
         if (value >= 0)
         {
             flow.following_instruction = branch_address(state, instruction);
         }
-        state.set_register_value(kReturnAddressRegister, state.program_counter().value_of() + kAfterDelaySlotOffset);
+        write_register(state, kReturnAddressRegister, state.program_counter.value_of() + kAfterDelaySlotOffset);
         break;
     case 0x12: // BLTZALL
         if (value < 0)
@@ -541,7 +543,7 @@ void Cpu::execute_regimm(CpuState &state, std::uint32_t instruction, ControlFlow
         {
             skip_delay_slot(state, flow);
         }
-        state.set_register_value(kReturnAddressRegister, state.program_counter().value_of() + kAfterDelaySlotOffset);
+        write_register(state, kReturnAddressRegister, state.program_counter.value_of() + kAfterDelaySlotOffset);
         break;
     case 0x13: // BGEZALL
         if (value >= 0)
@@ -552,7 +554,7 @@ void Cpu::execute_regimm(CpuState &state, std::uint32_t instruction, ControlFlow
         {
             skip_delay_slot(state, flow);
         }
-        state.set_register_value(kReturnAddressRegister, state.program_counter().value_of() + kAfterDelaySlotOffset);
+        write_register(state, kReturnAddressRegister, state.program_counter.value_of() + kAfterDelaySlotOffset);
         break;
     default:
         throw std::runtime_error("Unsupported Allegrex instruction");
@@ -564,21 +566,21 @@ GuestAddress Cpu::branch_address(const CpuState &state, std::uint32_t instructio
     const auto immediate = static_cast<std::uint16_t>(instruction);
     const auto offset = static_cast<std::int32_t>(std::bit_cast<std::int16_t>(immediate));
     // Branch offsets count instructions relative to PC + 4. Unsigned arithmetic permits wrapping backwards.
-    return GuestAddress{state.program_counter().value_of() + kInstructionSize +
+    return GuestAddress{state.program_counter.value_of() + kInstructionSize +
                         static_cast<std::uint32_t>(offset) * kInstructionSize};
 }
 
 void Cpu::skip_delay_slot(const CpuState &state, ControlFlow &flow) const
 {
     // Untaken branch-likely instructions skip the slot, including its side effects and faults.
-    flow.next_instruction = GuestAddress{state.program_counter().value_of() + kAfterDelaySlotOffset};
+    flow.next_instruction = GuestAddress{state.program_counter.value_of() + kAfterDelaySlotOffset};
     flow.following_instruction = GuestAddress{flow.next_instruction.value_of() + kInstructionSize};
 }
 
 GuestAddress Cpu::jump_address(const CpuState &state, std::uint32_t instruction) const
 {
     // J/JAL retain the upper four bits of PC + 4 and supply the remaining word address.
-    return GuestAddress{((state.program_counter().value_of() + kInstructionSize) & kJumpRegionMask) |
+    return GuestAddress{((state.program_counter.value_of() + kInstructionSize) & kJumpRegionMask) |
                         ((instruction & kJumpTargetMask) * kInstructionSize)};
 }
 
@@ -588,12 +590,31 @@ GuestAddress Cpu::data_address(const CpuState &state, std::uint32_t instruction,
     const auto immediate = static_cast<std::uint16_t>(instruction);
     const auto signed_immediate = static_cast<std::int32_t>(std::bit_cast<std::int16_t>(immediate));
     // The offset is signed, but address arithmetic wraps modulo 2^32.
-    const auto address = state.register_value(source) + static_cast<std::uint32_t>(signed_immediate);
+    const auto address = state.registers[source] + static_cast<std::uint32_t>(signed_immediate);
     if (address % static_cast<std::uint32_t>(alignment) != 0)
     {
         throw std::invalid_argument("Data address must be aligned");
     }
     return GuestAddress{address};
+}
+
+std::uint64_t Cpu::hi_lo_value(const CpuState &state) const
+{
+    return (static_cast<std::uint64_t>(state.high_register) << kRegisterBits) | state.low_register;
+}
+
+void Cpu::write_hi_lo(CpuState &state, std::uint64_t value)
+{
+    state.low_register = static_cast<std::uint32_t>(value);
+    state.high_register = static_cast<std::uint32_t>(value >> kRegisterBits);
+}
+
+void Cpu::write_register(CpuState &state, std::size_t index, std::uint32_t value)
+{
+    if (index != 0)
+    {
+        state.registers[index] = value;
+    }
 }
 
 } // namespace psp
