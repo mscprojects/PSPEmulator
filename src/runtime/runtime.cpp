@@ -22,7 +22,7 @@ std::string hexadecimal(std::uint32_t value)
 } // namespace
 
 Runtime::Runtime(const ParsedPrx &prx, const ExecutionOptions &options)
-    : loaded_(prepare_prx(prx, options.load_address, options.memory_size)), options_(options),
+    : loaded_(prepare_prx(prx, options.load_address, options.memory_size)), cpu_(loaded_.memory), options_(options),
       heap_(options.load_address.value_of()),
       stack_top_((static_cast<std::uint64_t>(options.load_address.value_of()) + options.memory_size) &
                  ~std::uint64_t{255})
@@ -77,9 +77,9 @@ Runtime::Runtime(const ParsedPrx &prx, const ExecutionOptions &options)
     }
     const auto argument_address = initial.stack + initial.stack_size - static_cast<std::uint32_t>(arguments.size());
     loaded_.memory.write_bytes(GuestAddress{argument_address}, arguments);
-    initial.cpu->set_register_value(4, static_cast<std::uint32_t>(arguments.size()));
-    initial.cpu->set_register_value(5, argument_address);
-    initial.cpu->set_register_value(29, (argument_address & ~15U) - 64);
+    initial.state.set_register_value(4, static_cast<std::uint32_t>(arguments.size()));
+    initial.state.set_register_value(5, argument_address);
+    initial.state.set_register_value(29, (argument_address & ~15U) - 64);
 }
 
 ExecutionResult Runtime::run()
@@ -87,27 +87,27 @@ ExecutionResult Runtime::run()
     while (!exit_code_)
     {
         auto &thread = threads_.at(current_thread_);
-        auto &cpu = *thread.cpu;
-        if (cpu.program_counter().value_of() == return_address_ || thread.finished)
+        auto &state = thread.state;
+        if (state.program_counter().value_of() == return_address_ || thread.finished)
         {
             thread.finished = true;
             if (ready_.empty())
             {
-                exit_code_ = std::bit_cast<std::int32_t>(cpu.register_value(2));
+                exit_code_ = std::bit_cast<std::int32_t>(state.register_value(2));
                 break;
             }
             current_thread_ = ready_.front();
             ready_.pop_front();
             continue;
         }
-        const auto pc = cpu.program_counter();
+        const auto pc = state.program_counter();
         try
         {
             if (instructions_ == options_.max_instructions)
             {
                 throw std::runtime_error("Instruction budget exhausted");
             }
-            const auto syscall = cpu.step();
+            const auto syscall = cpu_.step(state);
             ++instructions_;
             if (syscall)
             {
@@ -116,7 +116,7 @@ ExecutionResult Runtime::run()
                 {
                     throw std::runtime_error("Unbound syscall " + hexadecimal(*syscall));
                 }
-                cpu.set_register_value(2, service(cpu, binding->second));
+                state.set_register_value(2, service(state, binding->second));
             }
         }
         catch (const std::exception &error)
@@ -163,23 +163,23 @@ std::uint32_t Runtime::create_thread(GuestAddress entry, std::uint32_t stack_siz
         throw std::runtime_error("Thread stack must contain at least 512 bytes");
     }
     const auto stack = allocate(stack_size, true);
-    auto cpu = std::make_unique<Cpu>(loaded_.memory, entry);
-    cpu->set_register_value(28, loaded_.module.global_pointer.value_of());
-    cpu->set_register_value(29, static_cast<std::uint32_t>(static_cast<std::uint64_t>(stack) + stack_size - 64));
-    cpu->set_register_value(31, return_address_);
+    CpuState state(entry);
+    state.set_register_value(28, loaded_.module.global_pointer.value_of());
+    state.set_register_value(29, static_cast<std::uint32_t>(static_cast<std::uint64_t>(stack) + stack_size - 64));
+    state.set_register_value(31, return_address_);
     const auto id = next_id_++;
-    threads_.emplace(id, Thread{std::move(cpu), stack, stack_size, priority});
+    threads_.emplace(id, Thread{state, stack, stack_size, priority});
     return id;
 }
 
-std::uint32_t Runtime::argument(const Cpu &cpu, std::size_t index) const
+std::uint32_t Runtime::argument(const CpuState &state, std::size_t index) const
 {
     // Allegrex's eight integer argument registers are a0-a3 and t0-t3.
     if (index >= 8)
     {
         throw std::logic_error("Unsupported service argument index");
     }
-    return cpu.register_value(4 + index);
+    return state.register_value(4 + index);
 }
 
 std::string Runtime::read_string(std::uint32_t address) const
@@ -215,9 +215,9 @@ std::string Runtime::read_bytes(std::uint32_t address, std::uint32_t size) const
     return result;
 }
 
-std::uint32_t Runtime::service(Cpu &cpu, const ImportBinding &binding)
+std::uint32_t Runtime::service(CpuState &state, const ImportBinding &binding)
 {
-    const auto arg = [&](std::size_t index) { return argument(cpu, index); };
+    const auto arg = [&](std::size_t index) { return argument(state, index); };
     if (binding.library == "ThreadManForUser")
     {
         switch (binding.nid)
@@ -242,9 +242,9 @@ std::uint32_t Runtime::service(Cpu &cpu, const ImportBinding &binding)
                 loaded_.memory.write_u8(GuestAddress{address + static_cast<std::uint32_t>(index)},
                                         static_cast<std::uint8_t>(bytes[index]));
             }
-            thread.cpu->set_register_value(4, arg(1));
-            thread.cpu->set_register_value(5, address);
-            thread.cpu->set_register_value(29, (address & ~15U) - 64);
+            thread.state.set_register_value(4, arg(1));
+            thread.state.set_register_value(5, address);
+            thread.state.set_register_value(29, (address & ~15U) - 64);
             thread.started = true;
             ready_.push_back(arg(0));
             return 0;
@@ -255,7 +255,7 @@ std::uint32_t Runtime::service(Cpu &cpu, const ImportBinding &binding)
         case 0x94AA61EE: // sceKernelGetThreadCurrentPriority
             return threads_.at(current_thread_).priority;
         case 0x82BC5777: // sceKernelGetSystemTimeWide: deterministic logical time.
-            cpu.set_register_value(3, static_cast<std::uint32_t>(instructions_ >> 32));
+            state.set_register_value(3, static_cast<std::uint32_t>(instructions_ >> 32));
             return static_cast<std::uint32_t>(instructions_);
         default:
             break;

@@ -43,7 +43,7 @@ If sources disagree, record the exact instruction encoding and inputs, compare a
 
 The interpreter implements `J`, `JAL`, `JR`, `JALR`, `BEQ`, `BNE`, `BLEZ`, `BGTZ`, `BLTZ`, and `BGEZ`, plus integer branch-likely and branch-and-link variants. Each opcode states its condition directly. Ordinary branches execute the delay-slot instruction whether taken or untaken; branch-likely instructions skip it when untaken. FPU and VFPU branches await their respective register state and instruction support.
 
-The CPU keeps the current instruction address and the next instruction address. `step()` stages their successors locally and commits them only after successful execution, preserving the pending target when a delay-slot instruction fails. Exceptions are reported to the host; guest exception registers and exception handlers are not implemented. Control transfers inside delay slots are outside this milestone's supported behavior.
+Each thread’s `CpuState` keeps its registers, HI/LO, current instruction address, and next instruction address. A shared `Cpu` interpreter holds the memory reference and accepts the selected state for each instruction. Copying a state also preserves a pending delay-slot target. `step(state)` stages their successors locally and commits them only after successful execution, preserving the pending target when a delay-slot instruction fails. Exceptions are reported to the host; guest exception registers and exception handlers are not implemented. Control transfers inside delay slots are outside this milestone's supported behavior.
 
 Branch offsets count words relative to `PC + 4`; `J` and `JAL` combine their 26-bit word target with the upper four bits of `PC + 4`. Link instructions save `PC + 8`, which is already visible to the delay-slot instruction. Branch-and-link instructions write the link even when untaken. `JALR` reads its target before writing the destination register. A misaligned register jump faults when fetching the target, after the delay slot executes.
 
@@ -61,7 +61,7 @@ The [runtime integration test](../src/runtime/tests/execution_test.cpp) executes
 
 ## Runtime boundary
 
-`Cpu::step()` returns an optional syscall code after committing instruction control flow. In an import stub, `JR $ra` schedules the return and its delay-slot `SYSCALL` reports a service to the runtime. The runtime dispatches it by library name and NID, supplies results in guest registers, and resumes execution at the committed return target. CPU instruction semantics do not depend on PSP service implementations.
+`Cpu::step(CpuState &)` returns an optional syscall code after committing instruction control flow. In an import stub, `JR $ra` schedules the return and its delay-slot `SYSCALL` reports a service to the runtime. The runtime dispatches it by library name and NID, supplies results in guest registers, and resumes execution at the committed return target. CPU instruction semantics do not depend on PSP service implementations.
 
 Byte and halfword loads and stores (`LB`, `LBU`, `LH`, `LHU`, `SB`, `SH`) support the compiled startup and libc code. Signed loads extend their sign bits; unsigned loads zero-extend. Halfword and word accesses require their respective alignments. Memory bounds are checked before a register or memory write.
 

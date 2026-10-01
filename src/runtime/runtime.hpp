@@ -7,7 +7,6 @@
 
 #include <deque>
 #include <map>
-#include <memory>
 #include <optional>
 
 namespace psp::detail
@@ -25,7 +24,7 @@ class Runtime
 
     struct Thread
     {
-        std::unique_ptr<Cpu> cpu;
+        CpuState state;
         std::uint32_t stack;
         std::uint32_t stack_size;
         std::uint32_t priority;
@@ -40,12 +39,13 @@ public:
 private:
     std::uint32_t allocate(std::uint32_t size, bool high);
     std::uint32_t create_thread(GuestAddress entry, std::uint32_t stack_size, std::uint32_t priority);
-    std::uint32_t argument(const Cpu &cpu, std::size_t index) const;
+    std::uint32_t argument(const CpuState &state, std::size_t index) const;
     std::string read_string(std::uint32_t address) const;
     std::string read_bytes(std::uint32_t address, std::uint32_t size) const;
-    std::uint32_t service(Cpu &cpu, const ImportBinding &binding);
+    std::uint32_t service(CpuState &state, const ImportBinding &binding);
 
     LoadedPrx loaded_;
+    Cpu cpu_;
     const ExecutionOptions &options_;
     std::uint64_t heap_;
     std::uint64_t stack_top_;

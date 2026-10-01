@@ -101,9 +101,10 @@ TEST(PrxTest, LoadsSegmentsBssModuleAndUnresolvedImports)
     EXPECT_EQ(library.functions.front().stub_address, GuestAddress{kLoadAddress + 0xC0});
     EXPECT_EQ(loaded.memory.read_u32(library.functions.front().stub_address), 0x03E00008U);
     EXPECT_EQ(loaded.memory.read_u32(GuestAddress{kLoadAddress + 0xC4}), 0U);
-    Cpu cpu(loaded.memory, loaded.entry_point);
-    cpu.step();
-    EXPECT_EQ(cpu.register_value(2), 7U);
+    CpuState state(loaded.entry_point);
+    Cpu cpu(loaded.memory);
+    cpu.step(state);
+    EXPECT_EQ(state.register_value(2), 7U);
 }
 
 TEST(PrxTest, RelocatesWordsJumpsAndSignedHighLowPairs)
