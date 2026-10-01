@@ -27,7 +27,6 @@ class Cpu
         Word = 4,
     };
 
-    static constexpr std::size_t kZeroRegister = 0;           // $zero
     static constexpr std::size_t kReturnAddressRegister = 31; // $ra
 
 public:
@@ -46,9 +45,6 @@ private:
     void skip_delay_slot(const CpuState &state, ControlFlow &flow) const;
     GuestAddress jump_address(const CpuState &state, std::uint32_t instruction) const;
     GuestAddress data_address(const CpuState &state, std::uint32_t instruction, DataAlignment alignment) const;
-    std::uint64_t hi_lo_value(const CpuState &state) const;
-    void write_hi_lo(CpuState &state, std::uint64_t value);
-    void write_register(CpuState &state, std::size_t index, std::uint32_t value);
 
     Memory &memory_;
 };
