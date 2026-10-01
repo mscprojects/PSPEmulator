@@ -35,6 +35,7 @@ add_library(psp_core
     src/loader/prx_reader.cpp
     src/loader/prx.cpp
     src/runtime/execution.cpp
+    src/runtime/runtime.cpp
 )
 target_include_directories(psp_core PUBLIC src)
 target_link_libraries(psp_core PUBLIC project_options strong_type::strong_type)
