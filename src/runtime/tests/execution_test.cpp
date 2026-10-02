@@ -73,6 +73,47 @@ TEST(ExecutionTest, CapturesGuestConsoleWritesAndRejectsInvalidBuffers)
     EXPECT_THROW(execute_prx(read_prx(fixture.bytes)), std::runtime_error);
 }
 
+TEST(ExecutionTest, PassesStartupArgumentsAsNulSeparatedBytes)
+{
+    test::PrxFixture fixture;
+    fixture.word(0x180, 0xD0);
+    fixture.name(0x1D0, "IoFileMgrForUser");
+    fixture.word(0x1B0, 0x42EC03AC); // sceIoWrite
+    fixture.word(0x100, 0x27BDFFF0); // addiu $sp, $sp, -16
+    fixture.word(0x104, 0xAFBF000C); // sw $ra, 12($sp)
+    fixture.word(0x108, 0x00803021); // addu $a2, $a0, $zero: argument block length
+    fixture.word(0x10C, 0x24040001); // stdout; a1 already points to argument bytes
+    fixture.word(0x110, 0x0C000030); // jal imported stub
+    fixture.relocation(0x10, 4);
+    fixture.word(0x114, 0);          // nop (delay slot)
+    fixture.word(0x118, 0x8FBF000C); // lw $ra, 12($sp)
+    fixture.word(0x11C, 0x03E00008); // jr $ra
+    fixture.word(0x120, 0x27BD0010); // restore stack (delay slot)
+    const auto parsed = read_prx(fixture.bytes);
+    ExecutionOptions options;
+    options.arguments = {"program.prx", "", "hello world"};
+    const auto result = execute_prx(parsed, options);
+    EXPECT_EQ(result.output, std::string("program.prx\0\0hello world\0", 25));
+    EXPECT_EQ(result.exit_code, 25);
+    options.arguments = {""};
+    EXPECT_EQ(execute_prx(parsed, options).output, std::string(1, '\0'));
+    options.arguments.clear();
+    EXPECT_TRUE(execute_prx(parsed, options).output.empty());
+}
+
+TEST(ExecutionTest, EnforcesStartupArgumentStackCapacity)
+{
+    test::PrxFixture fixture;
+    fixture.word(0x100, 0x03E00008); // jr $ra
+    fixture.word(0x104, 0);          // nop (delay slot)
+    const auto parsed = read_prx(fixture.bytes);
+    ExecutionOptions options;
+    options.arguments = {std::string(0x10000 - 257, 'x')};
+    EXPECT_EQ(execute_prx(parsed, options).exit_code, 0);
+    options.arguments.front().push_back('x');
+    EXPECT_THROW(execute_prx(parsed, options), std::invalid_argument);
+}
+
 TEST(ExecutionTest, StopsAnInfiniteLoopAtTheInstructionBudget)
 {
     test::PrxFixture fixture;

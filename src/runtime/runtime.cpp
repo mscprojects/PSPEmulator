@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -17,6 +18,84 @@ std::string hexadecimal(std::uint32_t value)
     std::ostringstream stream;
     stream << "0x" << std::hex << value;
     return stream.str();
+}
+
+// Encode PSP startup arguments as consecutive NUL-terminated strings. The returned
+// bytes own their storage; embedded NULs are rejected because they split arguments.
+Payload encode_arguments(std::span<const std::string> arguments)
+{
+    Payload bytes;
+    for (const auto &text : arguments)
+    {
+        if (text.find('\0') != std::string::npos)
+        {
+            throw std::invalid_argument("Program arguments cannot contain NUL bytes");
+        }
+        bytes.insert(bytes.end(), text.begin(), text.end());
+        bytes.push_back(0);
+    }
+    return bytes;
+}
+
+// Copy argument bytes to the top of an allocated stack and initialize a0 (size),
+// a1 (address), and sp with alignment and call-frame space. The caller must ensure
+// arguments fit in the stack with at least 256 bytes left for the initial frame.
+void place_arguments(Memory &memory, CpuState &state, GuestAddress stack, std::uint32_t stack_size,
+                     PayloadSpan arguments)
+{
+    const auto address = stack.value_of() + stack_size - static_cast<std::uint32_t>(arguments.size());
+    memory.write_bytes(GuestAddress{address}, arguments);
+    state.registers[4] = static_cast<std::uint32_t>(arguments.size());
+    state.registers[5] = address;
+    state.registers[29] = (address & ~15U) - 64;
+}
+
+// Read one of the eight Allegrex integer service arguments (a0-a3 and t0-t3).
+// Reject indices that would require unsupported stack argument decoding.
+std::uint32_t service_argument(const CpuState &state, std::size_t index)
+{
+    if (index >= 8)
+    {
+        throw std::logic_error("Unsupported service argument index");
+    }
+    return state.registers[4 + index];
+}
+
+// Copy a NUL-terminated guest string; reject address overflow or no terminator
+// within 4096 bytes. Memory enforces the mapped region bounds.
+std::string read_guest_string(const Memory &memory, GuestAddress address)
+{
+    std::string result;
+    for (std::uint32_t index = 0; index < 4096; ++index)
+    {
+        if (static_cast<std::uint64_t>(address.value_of()) + index > 0xFFFFFFFFU)
+        {
+            throw std::runtime_error("Service string exceeds address space");
+        }
+        const auto byte = memory.read_u8(GuestAddress{address.value_of() + index});
+        if (byte == 0)
+        {
+            return result;
+        }
+        result.push_back(static_cast<char>(byte));
+    }
+    throw std::runtime_error("Unterminated service string");
+}
+
+// Copy a guest buffer, rejecting lengths beyond memory_size and address overflow.
+// An empty buffer is valid without dereferencing its address.
+std::string read_guest_bytes(const Memory &memory, std::size_t memory_size, GuestAddress address, std::uint32_t size)
+{
+    if (size > memory_size || static_cast<std::uint64_t>(address.value_of()) + size > (std::uint64_t{1} << 32))
+    {
+        throw std::runtime_error("Invalid service buffer range");
+    }
+    std::string result;
+    for (std::uint32_t index = 0; index < size; ++index)
+    {
+        result.push_back(static_cast<char>(memory.read_u8(GuestAddress{address.value_of() + index})));
+    }
+    return result;
 }
 
 } // namespace
@@ -61,25 +140,12 @@ Runtime::Runtime(const ParsedPrx &prx, const ExecutionOptions &options)
     current_thread_ = create_thread(loaded_.entry_point, 0x10000, 0x20);
     auto &initial = threads_.at(current_thread_);
     initial.started = true;
-    Payload arguments;
-    for (const auto &text : options.arguments)
-    {
-        if (text.find('\0') != std::string::npos)
-        {
-            throw std::invalid_argument("Program arguments cannot contain NUL bytes");
-        }
-        arguments.insert(arguments.end(), text.begin(), text.end());
-        arguments.push_back(0);
-    }
+    const auto arguments = encode_arguments(options.arguments);
     if (arguments.size() > 0x10000 - 256)
     {
         throw std::invalid_argument("Program arguments exceed startup stack capacity");
     }
-    const auto argument_address = initial.stack + initial.stack_size - static_cast<std::uint32_t>(arguments.size());
-    loaded_.memory.write_bytes(GuestAddress{argument_address}, arguments);
-    initial.state.registers[4] = static_cast<std::uint32_t>(arguments.size());
-    initial.state.registers[5] = argument_address;
-    initial.state.registers[29] = (argument_address & ~15U) - 64;
+    place_arguments(loaded_.memory, initial.state, GuestAddress{initial.stack}, initial.stack_size, arguments);
 }
 
 ExecutionResult Runtime::run()
@@ -172,52 +238,9 @@ std::uint32_t Runtime::create_thread(GuestAddress entry, std::uint32_t stack_siz
     return id;
 }
 
-std::uint32_t Runtime::argument(const CpuState &state, std::size_t index) const
-{
-    // Allegrex's eight integer argument registers are a0-a3 and t0-t3.
-    if (index >= 8)
-    {
-        throw std::logic_error("Unsupported service argument index");
-    }
-    return state.registers[4 + index];
-}
-
-std::string Runtime::read_string(std::uint32_t address) const
-{
-    std::string result;
-    for (std::uint32_t index = 0; index < 4096; ++index)
-    {
-        if (static_cast<std::uint64_t>(address) + index > 0xFFFFFFFFU)
-        {
-            throw std::runtime_error("Service string exceeds address space");
-        }
-        const auto byte = loaded_.memory.read_u8(GuestAddress{address + index});
-        if (byte == 0)
-        {
-            return result;
-        }
-        result.push_back(static_cast<char>(byte));
-    }
-    throw std::runtime_error("Unterminated service string");
-}
-
-std::string Runtime::read_bytes(std::uint32_t address, std::uint32_t size) const
-{
-    if (size > options_.memory_size || static_cast<std::uint64_t>(address) + size > (std::uint64_t{1} << 32))
-    {
-        throw std::runtime_error("Invalid service buffer range");
-    }
-    std::string result;
-    for (std::uint32_t index = 0; index < size; ++index)
-    {
-        result.push_back(static_cast<char>(loaded_.memory.read_u8(GuestAddress{address + index})));
-    }
-    return result;
-}
-
 std::uint32_t Runtime::service(CpuState &state, const ImportBinding &binding)
 {
-    const auto arg = [&](std::size_t index) { return argument(state, index); };
+    const auto arg = [&](std::size_t index) { return service_argument(state, index); };
     if (binding.library == "ThreadManForUser")
     {
         switch (binding.nid)
@@ -231,20 +254,13 @@ std::uint32_t Runtime::service(CpuState &state, const ImportBinding &binding)
             {
                 throw std::runtime_error("Thread already started");
             }
-            const auto bytes = read_bytes(arg(2), arg(1));
+            const auto bytes = read_guest_bytes(loaded_.memory, options_.memory_size, GuestAddress{arg(2)}, arg(1));
             if (bytes.size() > thread.stack_size - 256)
             {
                 throw std::runtime_error("Thread arguments exceed stack capacity");
             }
-            const auto address = thread.stack + thread.stack_size - static_cast<std::uint32_t>(bytes.size());
-            for (std::size_t index = 0; index < bytes.size(); ++index)
-            {
-                loaded_.memory.write_u8(GuestAddress{address + static_cast<std::uint32_t>(index)},
-                                        static_cast<std::uint8_t>(bytes[index]));
-            }
-            thread.state.registers[4] = arg(1);
-            thread.state.registers[5] = address;
-            thread.state.registers[29] = (address & ~15U) - 64;
+            place_arguments(loaded_.memory, thread.state, GuestAddress{thread.stack}, thread.stack_size,
+                            PayloadSpan{reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size()});
             thread.started = true;
             ready_.push_back(arg(0));
             return 0;
@@ -304,7 +320,7 @@ std::uint32_t Runtime::service(CpuState &state, const ImportBinding &binding)
         {
             throw std::runtime_error("Only stdout and stderr writes are supported");
         }
-        output_ += read_bytes(arg(1), arg(2));
+        output_ += read_guest_bytes(loaded_.memory, options_.memory_size, GuestAddress{arg(1)}, arg(2));
         return arg(2);
     }
     if (binding.library == "IoFileMgrForUser" && binding.nid == 0xB29DDF9C) // sceIoDopen
@@ -314,7 +330,7 @@ std::uint32_t Runtime::service(CpuState &state, const ImportBinding &binding)
     }
     if (binding.library == "IoFileMgrForUser" && binding.nid == 0x54F5FB11) // sceIoDevctl
     {
-        const auto device = read_string(arg(0));
+        const auto device = read_guest_string(loaded_.memory, GuestAddress{arg(0)});
         if (device != "emulator:" && device != "kemulator:")
         {
             throw std::runtime_error("Unsupported devctl device " + device);
@@ -329,7 +345,7 @@ std::uint32_t Runtime::service(CpuState &state, const ImportBinding &binding)
             loaded_.memory.write_u32(GuestAddress{arg(4)}, 0);
             return 0;
         case 2: // Capture the bytes produced by guest libc, not host formatting.
-            output_ += read_bytes(arg(2), arg(3));
+            output_ += read_guest_bytes(loaded_.memory, options_.memory_size, GuestAddress{arg(2)}, arg(3));
             return 0;
         case 3: // Emulator probe.
             return 0;
