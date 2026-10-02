@@ -1,9 +1,10 @@
 #include "runtime/runtime.hpp"
 
+#include <fmt/format.h>
+
 #include <algorithm>
 #include <bit>
 #include <span>
-#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -12,13 +13,6 @@ namespace psp::detail
 
 namespace
 {
-
-std::string hexadecimal(std::uint32_t value)
-{
-    std::ostringstream stream;
-    stream << "0x" << std::hex << value;
-    return stream.str();
-}
 
 // Encode PSP startup arguments as consecutive NUL-terminated strings. The returned
 // bytes own their storage; embedded NULs are rejected because they split arguments.
@@ -180,17 +174,17 @@ ExecutionResult Runtime::run()
                 const auto binding = imports_.find(*syscall);
                 if (binding == imports_.end())
                 {
-                    throw std::runtime_error("Unbound syscall " + hexadecimal(*syscall));
+                    throw std::runtime_error(fmt::format("Unbound syscall 0x{:x}", *syscall));
                 }
                 state.registers[2] = service(state, binding->second);
             }
         }
         catch (const std::exception &error)
         {
-            std::string context = "PRX execution at " + hexadecimal(pc.value_of());
+            std::string context = fmt::format("PRX execution at 0x{:x}", pc.value_of());
             try
             {
-                context += " (instruction " + hexadecimal(loaded_.memory.read_u32(pc)) + ")";
+                context += fmt::format(" (instruction 0x{:x})", loaded_.memory.read_u32(pc));
             }
             catch (const std::out_of_range &)
             {
@@ -358,7 +352,7 @@ std::uint32_t Runtime::service(CpuState &state, const ImportBinding &binding)
         exit_code_ = 0;
         return 0;
     }
-    throw std::runtime_error("Unsupported import " + binding.library + ":" + hexadecimal(binding.nid));
+    throw std::runtime_error(fmt::format("Unsupported import {}:0x{:x}", binding.library, binding.nid));
 }
 
 } // namespace psp::detail

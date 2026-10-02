@@ -38,7 +38,7 @@ add_library(psp_core
     src/runtime/runtime.cpp
 )
 target_include_directories(psp_core PUBLIC src)
-target_link_libraries(psp_core PUBLIC project_options strong_type::strong_type)
+target_link_libraries(psp_core PUBLIC project_options strong_type::strong_type PRIVATE fmt::fmt)
 
 add_executable(pspemu src/main.cpp)
 target_link_libraries(pspemu PRIVATE psp_core fmt::fmt)
