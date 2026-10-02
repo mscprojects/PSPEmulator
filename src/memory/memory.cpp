@@ -32,6 +32,37 @@ std::uint32_t Memory::read_u32(GuestAddress address) const
     return read_le(address, 4);
 }
 
+Payload Memory::read_bytes(GuestAddress address, std::size_t size) const
+{
+    if (size == 0)
+    {
+        return {};
+    }
+    const auto offset = checked_offset(address, size);
+    const auto bytes = PayloadSpan{bytes_}.subspan(offset, size);
+    return Payload(bytes.begin(), bytes.end());
+}
+
+std::string Memory::read_c_string(GuestAddress address, std::size_t max_length) const
+{
+    if (max_length == 0)
+    {
+        throw std::invalid_argument("String read limit must be positive");
+    }
+    const auto offset = checked_offset(address, 1);
+    const auto bytes = PayloadSpan{bytes_}.subspan(offset, std::min(max_length, bytes_.size() - offset));
+    const auto terminator = std::ranges::find(bytes, 0);
+    if (terminator != bytes.end())
+    {
+        return std::string(bytes.begin(), terminator);
+    }
+    if (max_length > bytes.size())
+    {
+        throw std::out_of_range("String read exceeds the mapped region");
+    }
+    throw std::runtime_error("String read limit reached without a NUL terminator");
+}
+
 void Memory::write_u8(GuestAddress address, std::uint8_t value)
 {
     write_le(address, value, 1);

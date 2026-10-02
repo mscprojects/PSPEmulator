@@ -55,43 +55,6 @@ std::uint32_t service_argument(const CpuState &state, std::size_t index)
     return state.registers[4 + index];
 }
 
-// Copy a NUL-terminated guest string; reject address overflow or no terminator
-// within 4096 bytes. Memory enforces the mapped region bounds.
-std::string read_guest_string(const Memory &memory, GuestAddress address)
-{
-    std::string result;
-    for (std::uint32_t index = 0; index < 4096; ++index)
-    {
-        if (static_cast<std::uint64_t>(address.value_of()) + index > 0xFFFFFFFFU)
-        {
-            throw std::runtime_error("Service string exceeds address space");
-        }
-        const auto byte = memory.read_u8(GuestAddress{address.value_of() + index});
-        if (byte == 0)
-        {
-            return result;
-        }
-        result.push_back(static_cast<char>(byte));
-    }
-    throw std::runtime_error("Unterminated service string");
-}
-
-// Copy a guest buffer, rejecting lengths beyond memory_size and address overflow.
-// An empty buffer is valid without dereferencing its address.
-std::string read_guest_bytes(const Memory &memory, std::size_t memory_size, GuestAddress address, std::uint32_t size)
-{
-    if (size > memory_size || static_cast<std::uint64_t>(address.value_of()) + size > (std::uint64_t{1} << 32))
-    {
-        throw std::runtime_error("Invalid service buffer range");
-    }
-    std::string result;
-    for (std::uint32_t index = 0; index < size; ++index)
-    {
-        result.push_back(static_cast<char>(memory.read_u8(GuestAddress{address.value_of() + index})));
-    }
-    return result;
-}
-
 } // namespace
 
 Runtime::Runtime(const ParsedPrx &prx, const ExecutionOptions &options)
@@ -248,13 +211,12 @@ std::uint32_t Runtime::service(CpuState &state, const ImportBinding &binding)
             {
                 throw std::runtime_error("Thread already started");
             }
-            const auto bytes = read_guest_bytes(loaded_.memory, options_.memory_size, GuestAddress{arg(2)}, arg(1));
+            const auto bytes = loaded_.memory.read_bytes(GuestAddress{arg(2)}, arg(1));
             if (bytes.size() > thread.stack_size - 256)
             {
                 throw std::runtime_error("Thread arguments exceed stack capacity");
             }
-            place_arguments(loaded_.memory, thread.state, GuestAddress{thread.stack}, thread.stack_size,
-                            PayloadSpan{reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size()});
+            place_arguments(loaded_.memory, thread.state, GuestAddress{thread.stack}, thread.stack_size, bytes);
             thread.started = true;
             ready_.push_back(arg(0));
             return 0;
@@ -314,7 +276,8 @@ std::uint32_t Runtime::service(CpuState &state, const ImportBinding &binding)
         {
             throw std::runtime_error("Only stdout and stderr writes are supported");
         }
-        output_ += read_guest_bytes(loaded_.memory, options_.memory_size, GuestAddress{arg(1)}, arg(2));
+        const auto bytes = loaded_.memory.read_bytes(GuestAddress{arg(1)}, arg(2));
+        output_.append(bytes.begin(), bytes.end());
         return arg(2);
     }
     if (binding.library == "IoFileMgrForUser" && binding.nid == 0xB29DDF9C) // sceIoDopen
@@ -324,7 +287,7 @@ std::uint32_t Runtime::service(CpuState &state, const ImportBinding &binding)
     }
     if (binding.library == "IoFileMgrForUser" && binding.nid == 0x54F5FB11) // sceIoDevctl
     {
-        const auto device = read_guest_string(loaded_.memory, GuestAddress{arg(0)});
+        const auto device = loaded_.memory.read_c_string(GuestAddress{arg(0)}, 4096);
         if (device != "emulator:" && device != "kemulator:")
         {
             throw std::runtime_error("Unsupported devctl device " + device);
@@ -339,8 +302,11 @@ std::uint32_t Runtime::service(CpuState &state, const ImportBinding &binding)
             loaded_.memory.write_u32(GuestAddress{arg(4)}, 0);
             return 0;
         case 2: // Capture the bytes produced by guest libc, not host formatting.
-            output_ += read_guest_bytes(loaded_.memory, options_.memory_size, GuestAddress{arg(2)}, arg(3));
+        {
+            const auto bytes = loaded_.memory.read_bytes(GuestAddress{arg(2)}, arg(3));
+            output_.append(bytes.begin(), bytes.end());
             return 0;
+        }
         case 3: // Emulator probe.
             return 0;
         default:
