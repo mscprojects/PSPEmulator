@@ -5,8 +5,8 @@
 #include "runtime/guest_io.hpp"
 #include "runtime/kernel.hpp"
 
-#include <map>
 #include <span>
+#include <vector>
 
 namespace psp::detail
 {
@@ -33,7 +33,7 @@ private:
     Memory &memory_;
     Kernel &kernel_;
     GuestIo &io_;
-    std::map<std::uint32_t, ImportBinding> imports_;
+    std::vector<ImportBinding> imports_;
 };
 
 } // namespace psp::detail

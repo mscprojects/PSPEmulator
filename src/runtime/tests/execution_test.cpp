@@ -104,6 +104,25 @@ TEST_P(CpuPrxExecutionTest, MatchesEntireHardwareOutput)
 
 INSTANTIATE_TEST_SUITE_P(BundledCpu, CpuPrxExecutionTest, testing::Values("cpu_alu", "cpu_branch2", "cpu_div"));
 
+TEST(ExecutionTest, RejectsUnboundSyscallCodes)
+{
+    for (const std::uint32_t code : {0U, 2U, 0xFFFFFU})
+    {
+        SCOPED_TRACE(code);
+        ServicePrxFixture program("StdioForUser", {0xA6BAB2E9});
+        program.instruction((code << 6) | 0xC);
+        try
+        {
+            execute_prx(program.finish());
+            FAIL() << "Unbound syscall codes must fail";
+        }
+        catch (const std::runtime_error &error)
+        {
+            EXPECT_NE(std::string(error.what()).find("Unbound syscall"), std::string::npos);
+        }
+    }
+}
+
 TEST(ExecutionTest, CreatesLightweightMutexWorkAreaAndDeletesItsIdentity)
 {
     ServicePrxFixture program("ThreadManForUser", {0x19CFF145, 0x60107536});
