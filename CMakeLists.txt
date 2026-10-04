@@ -40,9 +40,7 @@ add_library(psp_core
     src/runtime/guest_structures.cpp
     src/runtime/kernel.cpp
     src/runtime/runtime.cpp
-    src/runtime/synchronization.cpp
     src/runtime/syscall_dispatcher.cpp
-    src/runtime/threads.cpp
 )
 target_include_directories(psp_core PUBLIC src)
 target_link_libraries(psp_core PUBLIC project_options strong_type::strong_type PRIVATE fmt::fmt)

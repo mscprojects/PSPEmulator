@@ -18,14 +18,14 @@ Runtime::Runtime(const ParsedPrx &prx, const ExecutionOptions &options)
     {
         throw std::invalid_argument("Instruction budget must be positive");
     }
-    kernel_.threads.initialize(loaded_.entry_point, options.arguments);
+    kernel_.initialize(loaded_.entry_point, options.arguments);
 }
 
 ExecutionResult Runtime::run()
 {
-    while (kernel_.threads.select_next())
+    while (kernel_.select_next_thread())
     {
-        auto &state = kernel_.threads.current_state();
+        auto &state = kernel_.current_thread_state();
         const auto pc = state.program_counter;
         try
         {
@@ -55,7 +55,7 @@ ExecutionResult Runtime::run()
             throw std::runtime_error(context + ": " + error.what());
         }
     }
-    return {io_.take_output(), kernel_.threads.exit_code(), instructions_};
+    return {io_.take_output(), kernel_.exit_code(), instructions_};
 }
 
 } // namespace psp::detail

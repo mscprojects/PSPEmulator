@@ -44,28 +44,26 @@ std::uint32_t SyscallDispatcher::dispatch(CpuState &state, const ImportBinding &
 {
     // Allegrex integer service arguments occupy a0-a3 and t0-t3 (registers 4-11).
     const auto arg = [&](std::size_t index) { return state.registers.at(4 + index); };
-    auto &threads = kernel_.threads;
-    auto &synchronization = kernel_.synchronization;
     if (binding.library == "ThreadManForUser")
     {
         switch (binding.nid)
         {
         case 0x446D8DE6: // sceKernelCreateThread
-            return threads.create(
+            return kernel_.create_thread(
                 {GuestAddress{arg(1)}, arg(3), arg(2), memory_.read_c_string(GuestAddress{arg(0)}, 32), arg(4)});
         case 0xF475845D: // sceKernelStartThread
-            threads.start(arg(0), GuestAddress{arg(2)}, arg(1));
+            kernel_.start_thread(arg(0), GuestAddress{arg(2)}, arg(1));
             return 0;
         case 0xAA73C935: // sceKernelExitThread
-            threads.exit_current();
+            kernel_.exit_thread();
             return arg(0);
         case 0x293B45B8: // sceKernelGetThreadId
-            return threads.current_id();
+            return kernel_.current_thread_id();
         case 0x94AA61EE: // sceKernelGetThreadCurrentPriority
-            return threads.current_priority();
+            return kernel_.current_thread_priority();
         case 0x17C1684E: // sceKernelReferThreadStatus(a0: thread ID, a1: output pointer)
         {
-            const auto info = threads.status(arg(0));
+            const auto info = kernel_.thread_status(arg(0));
             const auto address = GuestAddress{arg(1)};
             if (memory_.read_u32(address) != sizeof(GuestThreadInfo))
             {
@@ -78,24 +76,21 @@ std::uint32_t SyscallDispatcher::dispatch(CpuState &state, const ImportBinding &
             state.registers[3] = static_cast<std::uint32_t>(instructions >> 32);
             return static_cast<std::uint32_t>(instructions);
         case 0x19CFF145: // sceKernelCreateLwMutex
-            synchronization.create_mutex(
-                {GuestAddress{arg(0)}, GuestAddress{arg(1)}, arg(2), arg(3), GuestAddress{arg(4)}},
-                threads.current_id());
+            kernel_.create_mutex({GuestAddress{arg(0)}, GuestAddress{arg(1)}, arg(2), arg(3), GuestAddress{arg(4)}});
             return 0;
         case 0x60107536: // sceKernelDeleteLwMutex
-            synchronization.delete_mutex(GuestAddress{arg(0)});
+            kernel_.delete_mutex(GuestAddress{arg(0)});
             return 0;
         case 0xD6DA4BA1: // sceKernelCreateSema
-            return synchronization.create_semaphore(
-                {GuestAddress{arg(0)}, arg(1), arg(2), arg(3), GuestAddress{arg(4)}});
+            return kernel_.create_semaphore({GuestAddress{arg(0)}, arg(1), arg(2), arg(3), GuestAddress{arg(4)}});
         case 0x28B6489C: // sceKernelDeleteSema
-            synchronization.delete_semaphore(arg(0));
+            kernel_.delete_semaphore(arg(0));
             return 0;
         case 0x4E3A1105: // sceKernelWaitSema
-            synchronization.wait_semaphore(arg(0), arg(1), GuestAddress{arg(2)});
+            kernel_.wait_semaphore(arg(0), arg(1), GuestAddress{arg(2)});
             return 0;
         case 0x3F53E640: // sceKernelSignalSema
-            synchronization.signal_semaphore(arg(0), arg(1));
+            kernel_.signal_semaphore(arg(0), arg(1));
             return 0;
         default:
             break;
@@ -106,10 +101,10 @@ std::uint32_t SyscallDispatcher::dispatch(CpuState &state, const ImportBinding &
         switch (binding.nid)
         {
         case 0xBEA46419: // sceKernelLockLwMutex
-            synchronization.lock_mutex(GuestAddress{arg(0)}, arg(1), GuestAddress{arg(2)}, threads.current_id());
+            kernel_.lock_mutex(GuestAddress{arg(0)}, arg(1), GuestAddress{arg(2)});
             return 0;
         case 0x15B6446B: // sceKernelUnlockLwMutex
-            synchronization.unlock_mutex(GuestAddress{arg(0)}, arg(1), threads.current_id());
+            kernel_.unlock_mutex(GuestAddress{arg(0)}, arg(1));
             return 0;
         default:
             break;
@@ -172,7 +167,7 @@ std::uint32_t SyscallDispatcher::dispatch(CpuState &state, const ImportBinding &
     }
     if (binding.library == "LoadExecForUser" && binding.nid == 0x05572A5F) // sceKernelExitGame
     {
-        threads.exit_game();
+        kernel_.exit_game();
         return 0;
     }
     throw std::runtime_error(fmt::format("Unsupported import {}:0x{:x}", binding.library, binding.nid));

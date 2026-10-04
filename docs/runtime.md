@@ -4,11 +4,11 @@
 
 ## Ownership
 
+Each component has one header and one implementation file. Related kernel services stay together in `kernel.hpp` and `kernel.cpp`; file size alone is not a reason to split them.
+
 - `Cpu` executes one Allegrex instruction against guest memory and the supplied `CpuState`.
 - `GuestAllocator` owns the monotonic arena shared by partition allocations and thread stacks, plus partition block addresses.
-- `Kernel` owns the shared object-ID counter, `Threads`, and `Synchronization`. It assigns partition IDs before delegating allocation to `GuestAllocator`. The kernel cannot be copied or moved because its components refer to its ID counter.
-- `Threads` owns saved CPU states, creation metadata, the ready queue, and execution termination. Each thread has an explicit created, started, or finished lifecycle; started threads are reported as running or ready according to the selected thread ID. It creates stacks through `GuestAllocator` and copies startup arguments into guest memory.
-- `Synchronization` owns mutex identities and semaphore counts. Guest mutex work areas remain authoritative for ownership and recursive counts. The caller supplies the current thread ID explicitly.
+- `Kernel` owns saved CPU states, thread creation metadata, the ready queue, execution termination, mutex identities, semaphore counts, and the shared object-ID counter. Each thread has an explicit created, started, or finished lifecycle; started threads are reported as running or ready according to the selected thread ID. The kernel creates stacks through `GuestAllocator` and assigns partition IDs before delegating allocation. Guest mutex work areas remain authoritative for ownership and recursive counts; mutex operations use the kernel's current thread ID.
 - `GuestIo` owns captured output and the autotest emulator device protocol. It exposes no host filesystem or display.
 - `SyscallDispatcher` owns import bindings and translates guest registers into named operations on those components. Small standard-stream and UTC timezone handlers remain here.
 
@@ -24,11 +24,11 @@ The runtime passes the event and current CPU state to the dispatcher. Integer ar
 
 [`guest_structures.hpp`](../src/runtime/guest_structures.hpp) defines named guest layouts based on the [PSPSDK thread header](https://github.com/pspdev/pspsdk/blob/master/src/user/pspthreadman.h). Each numeric field is a four-byte little-endian `GuestWord`, including guest pointers. The layouts contain no native pointers or host-sized integers. Compile-time size and offset checks guard the ABI. Complete structures are converted to byte arrays with `std::bit_cast` and written through `Memory::write_bytes()`, which validates the whole range before modifying guest memory. No preliminary read-and-discard is needed for output validation.
 
-`sceKernelReferThreadStatus` is imported from `ThreadManForUser` with NID `0x17C1684E`. Register `a0` supplies the thread ID; zero selects the current thread in this implementation. Register `a1` points to a `SceKernelThreadInfo` buffer whose initial `size` must be 104. `Threads::status()` builds the named fields and the dispatcher writes the complete structure, returning zero in `v0`. Invalid IDs or buffers and unsupported structure sizes produce host exceptions. Scheduling counters and wait fields remain zero. These are the current runtime's limits, rather than a complete hardware contract; the bundled [`refer.c`](../third_party/pspautotests/tests/threads/threads/refer.c) probes additional sizes and behaviors.
+`sceKernelReferThreadStatus` is imported from `ThreadManForUser` with NID `0x17C1684E`. Register `a0` supplies the thread ID; zero selects the current thread in this implementation. Register `a1` points to a `SceKernelThreadInfo` buffer whose initial `size` must be 104. `Kernel::thread_status()` builds the named fields and the dispatcher writes the complete structure, returning zero in `v0`. Invalid IDs or buffers and unsupported structure sizes produce host exceptions. Scheduling counters and wait fields remain zero. These are the current runtime's limits, rather than a complete hardware contract; the bundled [`refer.c`](../third_party/pspautotests/tests/threads/threads/refer.c) probes additional sizes and behaviors.
 
 ## Scheduling limits
 
-`Threads::select_next()` runs between CPU steps. The current thread continues until it exits or reaches the runtime's return sentinel after its return delay slot. The next ready thread is then selected. A game-exit service ends execution immediately. Starting a thread enqueues it without preempting the current thread.
+`Kernel::select_next_thread()` runs between CPU steps. The current thread continues until it exits or reaches the runtime's return sentinel after its return delay slot. The next ready thread is then selected. A game-exit service ends execution immediately. Starting a thread enqueues it without preempting the current thread.
 
 Blocking waits, callbacks, timeouts, and timer preemption remain unsupported. Current syscall handlers complete synchronously or throw. Adding blocking waits will require pending wait records, wake-up rules, and deferred return-register writes: a blocked syscall receives its result when the wait completes. Thread switching must happen after `Cpu::step()` and syscall dispatch have unwound, so references to the previous thread state remain valid throughout the instruction.
 
