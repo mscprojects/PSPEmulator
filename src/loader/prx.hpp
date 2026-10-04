@@ -33,6 +33,7 @@ struct PrxModule
     std::string name;
     std::uint16_t attributes;
     std::uint16_t version;
+    // Base for signed GP-relative addressing; it need not point into mapped memory.
     GuestAddress global_pointer;
     GuestAddress exports_begin;
     GuestAddress exports_end;

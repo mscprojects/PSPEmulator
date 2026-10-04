@@ -262,11 +262,29 @@ TEST(PrxTest, RejectsInvalidOrUnsupportedRelocations)
                  std::invalid_argument);
 }
 
+TEST(PrxTest, AllowsGlobalPointerOutsideMemoryForSignedSmallDataAccess)
+{
+    PrxFixture fixture;
+    fixture.word(0x160, 0x8020);     // GP base, outside the segment and guest memory
+    fixture.word(0x100, 0x8F828000); // lw $v0, -32768($gp)
+    fixture.word(0x120, 0x12345678); // small data at GP - 32768
+    const auto parsed = read_prx(fixture.bytes);
+    for (const std::uint32_t base : {0x08800000U, 0x08900000U})
+    {
+        SCOPED_TRACE(base);
+        auto loaded = prepare_prx(parsed, GuestAddress{base}, kMemorySize);
+        EXPECT_EQ(loaded.module.global_pointer, GuestAddress{base + 0x8020});
+        EXPECT_THROW(loaded.memory.read_u8(loaded.module.global_pointer), std::out_of_range);
+        CpuState state{.program_counter = loaded.entry_point};
+        state.registers[28] = loaded.module.global_pointer.value_of();
+        Cpu cpu(loaded.memory);
+        cpu.step(state);
+        EXPECT_EQ(state.registers[2], 0x12345678U);
+    }
+}
+
 TEST(PrxTest, RejectsMalformedModuleAndImportPointers)
 {
-    PrxFixture bad_gp;
-    bad_gp.word(0x160, 0x300); // spare RAM is not part of the image
-    EXPECT_THROW(prepare_prx(read_prx(bad_gp.bytes), GuestAddress{kLoadAddress}, kMemorySize), std::invalid_argument);
     PrxFixture reversed;
     reversed.word(0x170, 0x7C);
     EXPECT_THROW(prepare_prx(read_prx(reversed.bytes), GuestAddress{kLoadAddress}, kMemorySize), std::invalid_argument);
@@ -295,6 +313,32 @@ TEST(PrxTest, RejectsMalformedModuleAndImportPointers)
     unterminated.word(0x27C, 0x41414141);
     EXPECT_THROW(prepare_prx(read_prx(unterminated.bytes), GuestAddress{kLoadAddress}, kMemorySize),
                  std::invalid_argument);
+}
+
+TEST(PrxTest, LoadsBundledLsuWithGlobalPointerBeyondItsImage)
+{
+    std::ifstream input(std::string(PSPAUTOTESTS_ROOT) + "/tests/cpu/lsu/lsu.prx", std::ios::binary);
+    ASSERT_TRUE(input.is_open());
+    const Payload bytes{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    const auto parsed = read_prx(bytes);
+    for (const std::uint32_t base : {0x08800000U, 0x08900000U})
+    {
+        SCOPED_TRACE(base);
+        // Enough RAM for the image, but not for the biased GP base itself.
+        const auto loaded = prepare_prx(parsed, GuestAddress{base}, 0x1E570);
+        EXPECT_EQ(loaded.entry_point, GuestAddress{base + 0xAC});
+        EXPECT_EQ(loaded.module.name, "TESTMODULE");
+        EXPECT_EQ(loaded.module.global_pointer, GuestAddress{base + 0x20040});
+        EXPECT_EQ(loaded.module.exports_begin, GuestAddress{base + 0x15828});
+        EXPECT_EQ(loaded.module.exports_end, GuestAddress{base + 0x15838});
+        ASSERT_EQ(loaded.imports.size(), 9U);
+        const auto &library = loaded.imports.front();
+        EXPECT_EQ(library.name, "SysMemUserForUser");
+        ASSERT_EQ(library.functions.size(), 29U);
+        EXPECT_EQ(library.functions.front().nid, 0xA291F107U);
+        EXPECT_EQ(library.functions.front().stub_address, GuestAddress{base + 0x15624});
+        EXPECT_EQ(loaded.memory.read_u32(library.functions.front().stub_address), 0x03E00008U);
+    }
 }
 
 TEST(PrxTest, LoadsBundledCpuAluAtDifferentAddresses)

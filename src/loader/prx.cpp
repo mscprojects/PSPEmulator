@@ -355,10 +355,8 @@ LoadedPrx prepare_prx(const ParsedPrx &prx, GuestAddress load_address, std::size
         relocate(memory, segments, table);
     }
     auto module = read_module(memory, segments, prx.module_offset);
-    if (module.global_pointer.value_of() != 0)
-    {
-        require_mapped(segments, module.global_pointer, 1);
-    }
+    // PSPSDK's linker biases _gp by 0x7ff0 for signed small-data offsets.
+    // GP is an address base, so GP itself need not lie inside a loaded segment.
     if (module.exports_end.value_of() < module.exports_begin.value_of())
     {
         throw std::invalid_argument("PRX export range is reversed");
