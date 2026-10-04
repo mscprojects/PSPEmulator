@@ -104,6 +104,31 @@ TEST_P(CpuPrxExecutionTest, MatchesEntireHardwareOutput)
 
 INSTANTIATE_TEST_SUITE_P(BundledCpu, CpuPrxExecutionTest, testing::Values("cpu_alu", "cpu_branch2", "cpu_div"));
 
+TEST(ExecutionTest, BundledLsuMatchesHardwareOutputAtDifferentAddresses)
+{
+    const std::string directory = std::string(PSPAUTOTESTS_ROOT) + "/tests/cpu/lsu/";
+    std::ifstream input(directory + "lsu.prx", std::ios::binary);
+    std::ifstream expected_file(directory + "lsu.expected", std::ios::binary);
+    ASSERT_TRUE(input.is_open());
+    ASSERT_TRUE(expected_file.is_open());
+    const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    std::string expected{std::istreambuf_iterator<char>(expected_file), std::istreambuf_iterator<char>()};
+    // lsu.c prints a final blank line that is absent from the bundled .expected file.
+    expected += '\n';
+    const auto parsed = read_prx(payload);
+    for (const std::uint32_t base : {0x08800000U, 0x08900000U})
+    {
+        SCOPED_TRACE(base);
+        ExecutionOptions options;
+        options.load_address = GuestAddress{base};
+        const auto result = execute_prx(parsed, options);
+        EXPECT_EQ(result.exit_code, 0);
+        EXPECT_EQ(result.output, expected);
+        EXPECT_GT(result.instructions_executed, 0U);
+        EXPECT_LE(result.instructions_executed, options.max_instructions);
+    }
+}
+
 TEST(ExecutionTest, RejectsUnboundSyscallCodes)
 {
     for (const std::uint32_t code : {0U, 2U, 0xFFFFFU})

@@ -192,6 +192,15 @@ void Cpu::execute(CpuState &state, std::uint32_t instruction, ControlFlow &flow)
                        static_cast<std::uint32_t>(std::bit_cast<std::int16_t>(
                            memory_.read_u16(data_address(state, instruction, DataAlignment::Halfword)))));
         break;
+    case 0x22: // LWL: merge memory bytes into the left (most significant) register bytes.
+    {
+        const auto address = data_address(state, instruction, DataAlignment::Byte).value_of();
+        const auto shift = (3U - (address & 3U)) * 8;
+        const auto word = memory_.read_u32(GuestAddress{address & ~3U});
+        const auto mask = 0xFFFFFFFFU << shift;
+        write_register(state, target, (state.registers[target] & ~mask) | (word << shift));
+        break;
+    }
     case 0x23: // LW
         write_register(state, target, memory_.read_u32(data_address(state, instruction, DataAlignment::Word)));
         break;
@@ -201,6 +210,15 @@ void Cpu::execute(CpuState &state, std::uint32_t instruction, ControlFlow &flow)
     case 0x25: // LHU
         write_register(state, target, memory_.read_u16(data_address(state, instruction, DataAlignment::Halfword)));
         break;
+    case 0x26: // LWR: merge memory bytes into the right (least significant) register bytes.
+    {
+        const auto address = data_address(state, instruction, DataAlignment::Byte).value_of();
+        const auto shift = (address & 3U) * 8;
+        const auto word = memory_.read_u32(GuestAddress{address & ~3U});
+        const auto mask = 0xFFFFFFFFU >> shift;
+        write_register(state, target, (state.registers[target] & ~mask) | (word >> shift));
+        break;
+    }
     case 0x28: // SB
         memory_.write_u8(data_address(state, instruction, DataAlignment::Byte),
                          static_cast<std::uint8_t>(state.registers[target]));
@@ -209,9 +227,29 @@ void Cpu::execute(CpuState &state, std::uint32_t instruction, ControlFlow &flow)
         memory_.write_u16(data_address(state, instruction, DataAlignment::Halfword),
                           static_cast<std::uint16_t>(state.registers[target]));
         break;
+    case 0x2A: // SWL: store the register's left bytes, preserving the rest of the memory word.
+    {
+        const auto address = data_address(state, instruction, DataAlignment::Byte).value_of();
+        const auto aligned = GuestAddress{address & ~3U};
+        const auto shift = (3U - (address & 3U)) * 8;
+        const auto word = memory_.read_u32(aligned);
+        const auto mask = 0xFFFFFFFFU >> shift;
+        memory_.write_u32(aligned, (word & ~mask) | (state.registers[target] >> shift));
+        break;
+    }
     case 0x2B: // SW
         memory_.write_u32(data_address(state, instruction, DataAlignment::Word), state.registers[target]);
         break;
+    case 0x2E: // SWR: store the register's right bytes, preserving the rest of the memory word.
+    {
+        const auto address = data_address(state, instruction, DataAlignment::Byte).value_of();
+        const auto aligned = GuestAddress{address & ~3U};
+        const auto shift = (address & 3U) * 8;
+        const auto word = memory_.read_u32(aligned);
+        const auto mask = 0xFFFFFFFFU << shift;
+        memory_.write_u32(aligned, (word & ~mask) | (state.registers[target] << shift));
+        break;
+    }
     default:
         throw std::runtime_error("Unsupported Allegrex instruction");
     }

@@ -59,6 +59,12 @@ Tests cover each added instruction, boundary shift counts, signedness, full-widt
 
 The [runtime integration tests](../src/runtime/tests/execution_test.cpp) execute the bundled `cpu_alu.prx`, `cpu_branch2.prx`, and `cpu_div.prx` from their entry points at two load addresses, verify successful termination, and compare their entire output with the respective `.expected` files. The runtime supplies the startup and I/O services used by these paths; guest libc performs the formatting. Other instruction families, including FPU and VFPU operations, remain unsupported.
 
+## Unaligned word loads and stores
+
+The interpreter implements `LWL`, `LWR`, `SWL`, and `SWR` using the little-endian byte layouts in the MIPS instruction manual linked above (pages 133–140 and 211–214). Each instruction computes its address with a signed 16-bit offset, accesses the containing aligned word, and merges selected bytes while preserving the rest. A complementary left/right pair loads or stores an unaligned word spanning two aligned words, in either instruction order. Load results are available to the next instruction; writes to `$zero` are discarded after performing the memory access.
+
+CPU tests cover every byte offset, negative offsets, left/right pairs in both orders, base/destination register aliasing, `$zero`, and faults without modifying registers, memory, or pending control flow. The runtime integration test executes the bundled `lsu.prx` at two load addresses and compares the complete output with `lsu.expected` plus the final blank line emitted by `lsu.c` but omitted from that expectation file. The emulator preserves the guest output as written.
+
 ## Runtime boundary
 
 `Cpu::step(CpuState &)` returns an optional `Syscall` event containing its encoded code and instruction address after committing instruction control flow. In an import stub, `JR $ra` schedules the return and its delay-slot `SYSCALL` reports a service to the runtime. `SyscallDispatcher` resolves the code to a library name and NID, translates register arguments into named service operations, and supplies results in guest registers. Execution resumes at the committed return target. CPU instruction semantics do not depend on PSP service implementations. See [runtime and syscall handling](runtime.md) for component ownership, guest structures, and scheduling behavior.

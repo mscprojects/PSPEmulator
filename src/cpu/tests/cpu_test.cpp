@@ -41,6 +41,12 @@ struct AluResult
     std::uint32_t zero;
 };
 
+struct PartialWordCase
+{
+    std::uint32_t instruction;
+    std::array<std::uint32_t, 4> expected;
+};
+
 void load_program(Memory &memory, std::initializer_list<std::uint32_t> instructions)
 {
     auto address = kProgramBase;
@@ -295,6 +301,147 @@ TEST(CpuTest, RejectsMisalignedHalfwordsAndOutOfBoundsByteAccess)
         EXPECT_EQ(state.program_counter, GuestAddress{kProgramBase});
         EXPECT_EQ(state.registers[9], 0x12345678U);
         EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase}), instruction);
+    }
+}
+
+TEST(CpuTest, PartialWordLoadsMergeEveryByteOffset)
+{
+    // Expected values come from the bundled LSU hardware output.
+    const PartialWordCase cases[] = {
+        {0x89090000, {0x110E0D0C, 0x22110D0C, 0x3322110C, 0x44332211}}, // lwl $t1, offset($t0)
+        {0x99090000, {0x44332211, 0x0F443322, 0x0F0E4433, 0x0F0E0D44}}, // lwr $t1, offset($t0)
+    };
+    for (const auto &test : cases)
+    {
+        for (std::uint32_t offset = 0; offset < 4; ++offset)
+        {
+            for (const int displacement : {0, -4})
+            {
+                const auto immediate = static_cast<std::uint16_t>(displacement + static_cast<int>(offset));
+                SCOPED_TRACE(test.instruction | immediate);
+                Memory memory(GuestAddress{kProgramBase}, 128);
+                load_program(memory, {test.instruction | immediate});
+                memory.write_u32(GuestAddress{kProgramBase + 64}, 0x44332211);
+                CpuState state{.program_counter = GuestAddress{kProgramBase}};
+                state.registers[8] = kProgramBase + 64 - static_cast<std::uint32_t>(displacement);
+                state.registers[9] = 0x0F0E0D0C;
+                Cpu cpu(memory);
+                cpu.step(state);
+                EXPECT_EQ(state.registers[9], test.expected[offset]);
+                EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 64}), 0x44332211U);
+            }
+        }
+    }
+}
+
+TEST(CpuTest, PartialWordStoresMergeEveryByteOffset)
+{
+    const PartialWordCase cases[] = {
+        {0xA9090000, {0x44332212, 0x44331234, 0x44123456, 0x12345678}}, // swl $t1, offset($t0)
+        {0xB9090000, {0x12345678, 0x34567811, 0x56782211, 0x78332211}}, // swr $t1, offset($t0)
+    };
+    for (const auto &test : cases)
+    {
+        for (std::uint32_t offset = 0; offset < 4; ++offset)
+        {
+            for (const int displacement : {0, -4})
+            {
+                const auto immediate = static_cast<std::uint16_t>(displacement + static_cast<int>(offset));
+                SCOPED_TRACE(test.instruction | immediate);
+                Memory memory(GuestAddress{kProgramBase}, 128);
+                load_program(memory, {test.instruction | immediate});
+                memory.write_u32(GuestAddress{kProgramBase + 64}, 0x44332211);
+                memory.write_u32(GuestAddress{kProgramBase + 68}, 0x88776655);
+                CpuState state{.program_counter = GuestAddress{kProgramBase}};
+                state.registers[8] = kProgramBase + 64 - static_cast<std::uint32_t>(displacement);
+                state.registers[9] = 0x12345678;
+                Cpu cpu(memory);
+                cpu.step(state);
+                EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 64}), test.expected[offset]);
+                EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 68}), 0x88776655U);
+                EXPECT_EQ(state.registers[9], 0x12345678U);
+            }
+        }
+    }
+}
+
+TEST(CpuTest, PartialWordPairsLoadAndStoreAcrossAlignedWordsInEitherOrder)
+{
+    for (const bool reverse : {false, true})
+    {
+        SCOPED_TRACE(reverse);
+        Memory memory(GuestAddress{kProgramBase}, 128);
+        const std::uint32_t left_load = 0x89090003;   // lwl $t1, 3($t0)
+        const std::uint32_t right_load = 0x99090000;  // lwr $t1, 0($t0)
+        const std::uint32_t left_store = 0xA90A0003;  // swl $t2, 3($t0)
+        const std::uint32_t right_store = 0xB90A0000; // swr $t2, 0($t0)
+        if (reverse)
+        {
+            load_program(memory, {right_load, left_load, right_store, left_store});
+        }
+        else
+        {
+            load_program(memory, {left_load, right_load, left_store, right_store});
+        }
+        memory.write_bytes(GuestAddress{kProgramBase + 64}, Payload{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88});
+        CpuState state{.program_counter = GuestAddress{kProgramBase}};
+        state.registers[8] = kProgramBase + 65;
+        state.registers[9] = 0xFFFFFFFF;
+        state.registers[10] = 0xAABBCCDD;
+        Cpu cpu(memory);
+        step_n(cpu, state, 4);
+        EXPECT_EQ(state.registers[9], 0x55443322U);
+        EXPECT_EQ(memory.read_bytes(GuestAddress{kProgramBase + 64}, 8),
+                  (Payload{0x11, 0xDD, 0xCC, 0xBB, 0xAA, 0x66, 0x77, 0x88}));
+    }
+}
+
+TEST(CpuTest, PartialWordLoadsReadAliasedBaseBeforeWritingAndDiscardZeroWrites)
+{
+    for (const auto instruction : {0x89080000U, 0x99080000U, 0x89000000U, 0x99000000U})
+    {
+        SCOPED_TRACE(instruction);
+        Memory memory(GuestAddress{kProgramBase}, 128);
+        load_program(memory, {instruction});
+        memory.write_u32(GuestAddress{kProgramBase + 64}, 0x44332211);
+        CpuState state{.program_counter = GuestAddress{kProgramBase}};
+        state.registers[8] = kProgramBase + 65;
+        Cpu cpu(memory);
+        cpu.step(state);
+        if (instruction == 0x89080000U)
+        {
+            EXPECT_EQ(state.registers[8], 0x22110041U);
+        }
+        else if (instruction == 0x99080000U)
+        {
+            EXPECT_EQ(state.registers[8], 0x08443322U);
+        }
+        else
+        {
+            EXPECT_EQ(state.registers[0], 0U);
+            EXPECT_EQ(state.registers[8], kProgramBase + 65);
+        }
+    }
+}
+
+TEST(CpuTest, PartialWordFaultsPreserveRegistersMemoryAndPendingControlFlow)
+{
+    for (const auto instruction : {0x89090000U, 0x99090000U, 0xA9090000U, 0xB9090000U, 0x89000000U, 0x99000000U})
+    {
+        SCOPED_TRACE(instruction);
+        Memory memory(GuestAddress{kProgramBase}, 64);
+        load_program(memory, {instruction});
+        const auto original = memory.read_bytes(GuestAddress{kProgramBase}, 64);
+        CpuState state{.program_counter = GuestAddress{kProgramBase},
+                       .next_program_counter = GuestAddress{kProgramBase + 32}};
+        state.registers[8] = kProgramBase + 64;
+        state.registers[9] = 0x12345678;
+        Cpu cpu(memory);
+        EXPECT_THROW(cpu.step(state), std::out_of_range);
+        EXPECT_EQ(state.program_counter, GuestAddress{kProgramBase});
+        EXPECT_EQ(state.next_program_counter, GuestAddress{kProgramBase + 32});
+        EXPECT_EQ(state.registers[9], 0x12345678U);
+        EXPECT_EQ(memory.read_bytes(GuestAddress{kProgramBase}, 64), original);
     }
 }
 
