@@ -1,27 +1,23 @@
 #include "runtime/guest_structures.hpp"
 
-#include <algorithm>
 #include <bit>
+#include <cstring>
 
 namespace psp::detail
 {
 
+static_assert(std::endian::native == std::endian::little || std::endian::native == std::endian::big);
+
 GuestWord::GuestWord(std::uint32_t value)
+    : bytes(std::bit_cast<std::array<std::uint8_t, 4>>(
+          std::endian::native == std::endian::little ? value : std::byteswap(value)))
 {
-    for (unsigned index = 0; index < bytes.size(); ++index)
-    {
-        bytes[index] = static_cast<std::uint8_t>(value >> (index * 8));
-    }
 }
 
 std::uint32_t GuestWord::value() const
 {
-    std::uint32_t result = 0;
-    for (unsigned index = 0; index < bytes.size(); ++index)
-    {
-        result |= static_cast<std::uint32_t>(bytes[index]) << (index * 8);
-    }
-    return result;
+    const auto native = std::bit_cast<std::uint32_t>(bytes);
+    return std::endian::native == std::endian::little ? native : std::byteswap(native);
 }
 
 void write_thread_info(Memory &memory, GuestAddress address, const GuestThreadInfo &info)
@@ -32,9 +28,9 @@ void write_thread_info(Memory &memory, GuestAddress address, const GuestThreadIn
 GuestMutexWorkArea read_mutex_work_area(const Memory &memory, GuestAddress address)
 {
     const auto payload = memory.read_bytes(address, sizeof(GuestMutexWorkArea));
-    std::array<std::uint8_t, sizeof(GuestMutexWorkArea)> bytes{};
-    std::ranges::copy(payload, bytes.begin());
-    return std::bit_cast<GuestMutexWorkArea>(bytes);
+    GuestMutexWorkArea work_area;
+    std::memcpy(&work_area, payload.data(), sizeof(work_area));
+    return work_area;
 }
 
 void write_mutex_work_area(Memory &memory, GuestAddress address, const GuestMutexWorkArea &work_area)

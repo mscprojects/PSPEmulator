@@ -7,7 +7,7 @@
 - `Cpu` executes one Allegrex instruction against guest memory and the supplied `CpuState`.
 - `GuestAllocator` owns the monotonic arena shared by partition allocations and thread stacks, plus partition block addresses.
 - `Kernel` owns the shared object-ID counter, `Threads`, and `Synchronization`. It assigns partition IDs before delegating allocation to `GuestAllocator`. The kernel cannot be copied or moved because its components refer to its ID counter.
-- `Threads` owns saved CPU states, metadata, the ready queue, and execution termination. It creates stacks through `GuestAllocator` and copies startup arguments into guest memory.
+- `Threads` owns saved CPU states, creation metadata, the ready queue, and execution termination. Each thread has an explicit created, started, or finished lifecycle; started threads are reported as running or ready according to the selected thread ID. It creates stacks through `GuestAllocator` and copies startup arguments into guest memory.
 - `Synchronization` owns mutex identities and semaphore counts. Guest mutex work areas remain authoritative for ownership and recursive counts. The caller supplies the current thread ID explicitly.
 - `GuestIo` owns captured output and the autotest emulator device protocol. It exposes no host filesystem or display.
 - `SyscallDispatcher` owns import bindings and translates guest registers into named operations on those components. Small standard-stream and UTC timezone handlers remain here.

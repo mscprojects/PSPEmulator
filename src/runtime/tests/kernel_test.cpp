@@ -15,7 +15,9 @@ TEST(KernelTest, ThreadSelectionPreservesSeparateCpuStatesAndReturnStatus)
     kernel.threads.initialize(GuestAddress{0x400}, {});
     const auto first = kernel.threads.current_id();
     const auto second = kernel.threads.create({GuestAddress{0x800}, 0x1000, 0x30, "second", 0});
+    EXPECT_EQ(kernel.threads.status(second).status.value(), 16U); // created, not started
     kernel.threads.start(second, GuestAddress{0}, 0);
+    EXPECT_THROW(kernel.threads.start(second, GuestAddress{0}, 0), std::runtime_error);
     EXPECT_TRUE(kernel.threads.select_next());
     EXPECT_EQ(kernel.threads.current_id(), first);
     EXPECT_EQ(kernel.threads.status(second).status.value(), 2U); // ready
@@ -30,6 +32,7 @@ TEST(KernelTest, ThreadSelectionPreservesSeparateCpuStatesAndReturnStatus)
     EXPECT_EQ(kernel.threads.current_state().registers[31], first_state.registers[31]);
     EXPECT_EQ(kernel.threads.status(first).entry.value(), 0x400U);
     EXPECT_EQ(kernel.threads.status(first).status.value(), 16U); // stopped
+    EXPECT_THROW(kernel.threads.start(first, GuestAddress{0}, 0), std::runtime_error);
     EXPECT_EQ(kernel.threads.status(0).name[0], 's');
 
     // Returning to the sentinel finishes only after the CPU has executed the

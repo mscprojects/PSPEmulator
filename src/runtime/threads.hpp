@@ -25,17 +25,19 @@ struct ThreadCreation
 // threads are supported; blocking waits and preemption require further work.
 class Threads
 {
+    enum class Lifecycle : std::uint8_t
+    {
+        Created,
+        Started,
+        Finished,
+    };
+
     struct Thread
     {
+        ThreadCreation creation;
         CpuState state;
         GuestAddress stack;
-        std::uint32_t stack_size;
-        std::uint32_t priority;
-        bool started{};
-        bool finished{};
-        GuestAddress entry;
-        std::string name;
-        std::uint32_t attributes;
+        Lifecycle lifecycle{Lifecycle::Created};
     };
 
 public:

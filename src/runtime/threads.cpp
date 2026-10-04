@@ -16,6 +16,7 @@ Threads::Threads(Memory &memory, GuestAllocator &allocator, std::uint32_t &next_
 
 void Threads::initialize(GuestAddress entry, std::span<const std::string> arguments)
 {
+    constexpr std::uint32_t stack_size = 0x10000;
     Payload bytes;
     for (const auto &text : arguments)
     {
@@ -26,14 +27,14 @@ void Threads::initialize(GuestAddress entry, std::span<const std::string> argume
         bytes.insert(bytes.end(), text.begin(), text.end());
         bytes.push_back(0);
     }
-    if (bytes.size() > 0x10000 - 256)
+    if (bytes.size() > stack_size - 256)
     {
         throw std::invalid_argument("Program arguments exceed startup stack capacity");
     }
-    current_thread_ = create({entry, 0x10000, 0x20, "startup", 0x80000000});
+    current_thread_ = create({entry, stack_size, 0x20, "startup", 0x80000000});
     auto &initial = threads_.at(current_thread_);
     place_arguments(initial, bytes);
-    initial.started = true;
+    initial.lifecycle = Lifecycle::Started;
 }
 
 std::uint32_t Threads::create(ThreadCreation creation)
@@ -45,29 +46,26 @@ std::uint32_t Threads::create(ThreadCreation creation)
     const auto stack = allocator_.allocate(creation.stack_size, true);
     CpuState state{.program_counter = creation.entry};
     state.registers[28] = global_pointer_.value_of();
-    state.registers[29] =
-        static_cast<std::uint32_t>(static_cast<std::uint64_t>(stack.value_of()) + creation.stack_size - 64);
     state.registers[31] = return_address_.value_of();
     const auto id = next_id_++;
-    threads_.emplace(id, Thread{state, stack, creation.stack_size, creation.priority, false, false, creation.entry,
-                                std::move(creation.name), creation.attributes});
+    threads_.emplace(id, Thread{std::move(creation), state, stack});
     return id;
 }
 
 void Threads::start(std::uint32_t id, GuestAddress arguments, std::uint32_t argument_size)
 {
     auto &thread = threads_.at(id);
-    if (thread.started)
+    if (thread.lifecycle != Lifecycle::Created)
     {
         throw std::runtime_error("Thread already started");
     }
     const auto bytes = memory_.read_bytes(arguments, argument_size);
-    if (bytes.size() > thread.stack_size - 256)
+    if (bytes.size() > thread.creation.stack_size - 256)
     {
         throw std::runtime_error("Thread arguments exceed stack capacity");
     }
     place_arguments(thread, bytes);
-    thread.started = true;
+    thread.lifecycle = Lifecycle::Started;
     ready_.push_back(id);
 }
 
@@ -78,9 +76,9 @@ bool Threads::select_next()
         return false;
     }
     auto &thread = threads_.at(current_thread_);
-    if (thread.state.program_counter == return_address_ || thread.finished)
+    if (thread.state.program_counter == return_address_ || thread.lifecycle == Lifecycle::Finished)
     {
-        thread.finished = true;
+        thread.lifecycle = Lifecycle::Finished;
         if (ready_.empty())
         {
             exit_code_ = std::bit_cast<std::int32_t>(thread.state.registers[2]);
@@ -104,12 +102,12 @@ std::uint32_t Threads::current_id() const
 
 std::uint32_t Threads::current_priority() const
 {
-    return threads_.at(current_thread_).priority;
+    return threads_.at(current_thread_).creation.priority;
 }
 
 void Threads::exit_current()
 {
-    threads_.at(current_thread_).finished = true;
+    threads_.at(current_thread_).lifecycle = Lifecycle::Finished;
 }
 
 void Threads::exit_game()
@@ -133,26 +131,24 @@ GuestThreadInfo Threads::status(std::uint32_t id) const
         id = current_thread_;
     }
     const auto &thread = threads_.at(id);
+    const auto &creation = thread.creation;
     GuestThreadInfo info;
-    const auto name_size = static_cast<std::ptrdiff_t>(std::min(thread.name.size(), info.name.size() - 1));
-    std::ranges::copy_n(thread.name.begin(), name_size, info.name.begin());
-    info.attributes = thread.attributes;
-    const auto status = [&]
+    const auto name_size = static_cast<std::ptrdiff_t>(std::min(creation.name.size(), info.name.size() - 1));
+    std::ranges::copy_n(creation.name.begin(), name_size, info.name.begin());
+    info.attributes = creation.attributes;
+    auto status = ThreadStatus::Stopped;
+    if (thread.lifecycle == Lifecycle::Started)
     {
-        if (thread.finished || !thread.started)
-        {
-            return ThreadStatus::Stopped;
-        }
-        return id == current_thread_ ? ThreadStatus::Running : ThreadStatus::Ready;
-    }();
+        status = id == current_thread_ ? ThreadStatus::Running : ThreadStatus::Ready;
+    }
     info.status = static_cast<std::uint32_t>(status);
-    info.entry = thread.entry.value_of();
+    info.entry = creation.entry.value_of();
     info.stack = thread.stack.value_of();
-    info.stack_size = thread.stack_size;
+    info.stack_size = creation.stack_size;
     info.global_pointer = global_pointer_.value_of();
-    info.initial_priority = thread.priority;
-    info.current_priority = thread.priority;
-    info.exit_status = thread.finished ? thread.state.registers[2] : 0;
+    info.initial_priority = creation.priority;
+    info.current_priority = creation.priority;
+    info.exit_status = thread.lifecycle == Lifecycle::Finished ? thread.state.registers[2] : 0;
     // Wait and scheduling counters remain zero in this cooperative runtime.
     return info;
 }
@@ -160,7 +156,8 @@ GuestThreadInfo Threads::status(std::uint32_t id) const
 void Threads::place_arguments(Thread &thread, PayloadSpan arguments)
 {
     // Arguments sit at the top of the stack, above an aligned initial call frame.
-    const auto address = thread.stack.value_of() + thread.stack_size - static_cast<std::uint32_t>(arguments.size());
+    const auto address =
+        thread.stack.value_of() + thread.creation.stack_size - static_cast<std::uint32_t>(arguments.size());
     memory_.write_bytes(GuestAddress{address}, arguments);
     thread.state.registers[4] = static_cast<std::uint32_t>(arguments.size());
     thread.state.registers[5] = address;
