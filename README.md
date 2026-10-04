@@ -1,6 +1,6 @@
 # PSPEmulator
 
-An early PSP emulator project with a headless interpreter. It can load and execute the bundled `cpu_alu` PRX and reproduce its complete expected output. It does not yet run games.
+An early PSP emulator project with a headless interpreter. It can load and execute the bundled `cpu_alu`, `cpu_branch2`, and `cpu_div` PRXs and reproduce their complete expected output. It does not yet run games.
 
 ## Build
 
@@ -36,9 +36,9 @@ Project tests live beside the code they cover, under each component's `tests/` d
 
 Tests and the CLI share `psp::execute_prx()` from `runtime/execution.hpp`. It accepts a self-contained `ParsedPrx` and execution options, initializes guest memory, stack, GP, and a NUL-separated PSP argument block, and returns output, termination status, and the instruction count. It throws on unsupported services, CPU faults, and budget exhaustion. Each invocation owns independent runtime state. Each guest thread owns a `CpuState` containing its registers, HI/LO, and instruction addresses. The runtime shares one `Cpu` interpreter bound to guest memory and executes the selected thread with `cpu.step(state)`.
 
-The runtime runs threads cooperatively until they return or exit. It supports startup thread creation, user-partition allocation, standard stream identifiers, console writes, and the PSP autotest emulator device protocol. Formatting runs inside the PRX's libc; the host captures the bytes it emits. Guest directories are unavailable, and the runtime does not access host files. Scheduling, allocation reclamation, and the PSP kernel are incomplete; unsupported calls fail when invoked. Uncalled imports can remain unsupported. There is no graphics, audio, FPU, or VFPU support yet.
+The runtime runs threads cooperatively until they return or exit. It supports startup thread creation and status queries, user-partition allocation, lightweight mutex creation/deletion and uncontended recursive locking, semaphore creation/deletion and immediately satisfiable waits/signals, standard stream identifiers, console writes, and the PSP autotest emulator device protocol. Guest timezone queries return UTC with daylight saving disabled. Formatting runs inside the PRX's libc; the host captures the bytes it emits. Guest directories are unavailable, and the runtime does not access host files. Blocking synchronization, callbacks, scheduling, allocation reclamation, and the PSP kernel are incomplete; unsupported calls and parameters fail when invoked. Thread status requires the 104-byte structure; wait and scheduling counters remain zero. Uncalled imports can remain unsupported. There is no graphics, audio, FPU, or VFPU support yet.
 
-The integration test executes the unmodified bundled `cpu_alu.prx` from its ELF entry point at two load addresses, verifies successful termination, and compares every output byte with `cpu_alu.expected`.
+The integration tests execute the unmodified bundled `cpu_alu.prx`, `cpu_branch2.prx`, and `cpu_div.prx` from their ELF entry points at two load addresses, verify successful termination, and compare every output byte with their respective `.expected` files.
 
 ## CPU documentation
 

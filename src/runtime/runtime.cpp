@@ -94,7 +94,7 @@ Runtime::Runtime(const ParsedPrx &prx, const ExecutionOptions &options)
             ++code;
         }
     }
-    current_thread_ = create_thread(loaded_.entry_point, 0x10000, 0x20);
+    current_thread_ = create_thread(loaded_.entry_point, 0x10000, 0x20, "startup", 0x80000000);
     auto &initial = threads_.at(current_thread_);
     initial.started = true;
     const auto arguments = encode_arguments(options.arguments);
@@ -179,7 +179,8 @@ std::uint32_t Runtime::allocate(std::uint32_t size, bool high)
     return address;
 }
 
-std::uint32_t Runtime::create_thread(GuestAddress entry, std::uint32_t stack_size, std::uint32_t priority)
+std::uint32_t Runtime::create_thread(GuestAddress entry, std::uint32_t stack_size, std::uint32_t priority,
+                                     std::string name, std::uint32_t attributes)
 {
     if (stack_size < 512)
     {
@@ -191,19 +192,186 @@ std::uint32_t Runtime::create_thread(GuestAddress entry, std::uint32_t stack_siz
     state.registers[29] = static_cast<std::uint32_t>(static_cast<std::uint64_t>(stack) + stack_size - 64);
     state.registers[31] = return_address_;
     const auto id = next_id_++;
-    threads_.emplace(id, Thread{state, stack, stack_size, priority});
+    threads_.emplace(id, Thread{state, stack, stack_size, priority, false, false, entry, std::move(name), attributes});
     return id;
 }
 
 std::uint32_t Runtime::service(CpuState &state, const ImportBinding &binding)
 {
     const auto arg = [&](std::size_t index) { return service_argument(state, index); };
+    if (binding.library == "sceUtility" && binding.nid == 0xA5DA2406) // sceUtilityGetSystemParamInt
+    {
+        if (arg(0) != 6 && arg(0) != 7)
+        {
+            throw std::runtime_error("Unsupported integer system parameter");
+        }
+        // A deterministic UTC guest timezone, with daylight saving disabled.
+        loaded_.memory.write_u32(GuestAddress{arg(1)}, 0);
+        return 0;
+    }
+    if (binding.library == "Kernel_Library" && (binding.nid == 0xBEA46419 || binding.nid == 0x15B6446B))
+    {
+        const auto address = GuestAddress{arg(0)};
+        if ((arg(0) & 3U) != 0)
+        {
+            throw std::runtime_error("Misaligned lightweight mutex work area");
+        }
+        loaded_.memory.read_bytes(address, 32);
+        const auto id = loaded_.memory.read_u32(GuestAddress{arg(0) + 16});
+        const auto mutex = lightweight_mutexes_.find(id);
+        if (mutex == lightweight_mutexes_.end() || mutex->second != address || arg(1) == 0 || arg(1) > 0x7FFFFFFFU ||
+            loaded_.memory.read_u32(GuestAddress{arg(0) + 12}) != 0)
+        {
+            throw std::runtime_error("Invalid lightweight mutex or unsupported waiters");
+        }
+        const auto count = loaded_.memory.read_u32(address);
+        const auto owner = loaded_.memory.read_u32(GuestAddress{arg(0) + 4});
+        const auto attributes = loaded_.memory.read_u32(GuestAddress{arg(0) + 8});
+        if ((attributes & 0x200U) == 0 && arg(1) != 1)
+        {
+            throw std::runtime_error("Nonrecursive lightweight mutex requires count one");
+        }
+        if (binding.nid == 0xBEA46419) // sceKernelLockLwMutex
+        {
+            if (arg(2) != 0 || count > 0x7FFFFFFFU || arg(1) > 0x7FFFFFFFU - count ||
+                (count != 0 && (owner != current_thread_ || (attributes & 0x200U) == 0)))
+            {
+                throw std::runtime_error("Unsupported lightweight mutex wait or invalid lock count");
+            }
+            loaded_.memory.write_u32(address, count + arg(1));
+            loaded_.memory.write_u32(GuestAddress{arg(0) + 4}, current_thread_);
+        }
+        else // sceKernelUnlockLwMutex
+        {
+            if (owner != current_thread_ || arg(1) > count)
+            {
+                throw std::runtime_error("Lightweight mutex is not owned or unlock count exceeds lock count");
+            }
+            loaded_.memory.write_u32(address, count - arg(1));
+            if (count == arg(1))
+            {
+                loaded_.memory.write_u32(GuestAddress{arg(0) + 4}, 0);
+            }
+        }
+        return 0;
+    }
     if (binding.library == "ThreadManForUser")
     {
         switch (binding.nid)
         {
+        case 0xD6DA4BA1: // sceKernelCreateSema
+        {
+            if (arg(1) != 0 || arg(4) != 0 || arg(3) == 0 || arg(3) > 0x7FFFFFFFU || arg(2) > arg(3))
+            {
+                throw std::runtime_error("Unsupported semaphore creation parameters");
+            }
+            loaded_.memory.read_c_string(GuestAddress{arg(0)}, 32);
+            const auto id = next_id_++;
+            semaphores_.emplace(id, Semaphore{arg(2), arg(3)});
+            return id;
+        }
+        case 0x28B6489C: // sceKernelDeleteSema
+            if (semaphores_.erase(arg(0)) == 0)
+            {
+                throw std::runtime_error("Invalid semaphore");
+            }
+            return 0;
+        case 0x4E3A1105: // sceKernelWaitSema: only immediately satisfiable waits.
+        {
+            auto &semaphore = semaphores_.at(arg(0));
+            if (arg(2) != 0 || arg(1) == 0 || arg(1) > semaphore.count)
+            {
+                throw std::runtime_error("Unsupported semaphore wait");
+            }
+            semaphore.count -= arg(1);
+            return 0;
+        }
+        case 0x3F53E640: // sceKernelSignalSema
+        {
+            auto &semaphore = semaphores_.at(arg(0));
+            if (arg(1) == 0 || arg(1) > semaphore.maximum - semaphore.count)
+            {
+                throw std::runtime_error("Invalid semaphore signal count");
+            }
+            semaphore.count += arg(1);
+            return 0;
+        }
+        case 0x19CFF145: // sceKernelCreateLwMutex
+        {
+            // The 32-byte guest work area exposes ownership and lock counts.
+            // Kernel waiting and optional creation parameters are not
+            // supported by this cooperative runtime.
+            if ((arg(0) & 3U) != 0 || arg(4) != 0 || (arg(2) & ~0x300U) != 0 || arg(3) > 0x7FFFFFFFU ||
+                ((arg(2) & 0x200U) == 0 && arg(3) > 1))
+            {
+                throw std::runtime_error("Unsupported lightweight mutex creation parameters");
+            }
+            const auto address = GuestAddress{arg(0)};
+            loaded_.memory.read_bytes(address, 32);
+            loaded_.memory.read_c_string(GuestAddress{arg(1)}, 32);
+            const auto id = next_id_++;
+            lightweight_mutexes_.emplace(id, address);
+            loaded_.memory.write_bytes(address, Payload(32, 0));
+            loaded_.memory.write_u32(address, arg(3));
+            loaded_.memory.write_u32(GuestAddress{arg(0) + 4}, arg(3) == 0 ? 0 : current_thread_);
+            loaded_.memory.write_u32(GuestAddress{arg(0) + 8}, arg(2));
+            loaded_.memory.write_u32(GuestAddress{arg(0) + 16}, id);
+            return 0;
+        }
+        case 0x60107536: // sceKernelDeleteLwMutex
+        {
+            if ((arg(0) & 3U) != 0)
+            {
+                throw std::runtime_error("Misaligned lightweight mutex work area");
+            }
+            const auto address = GuestAddress{arg(0)};
+            loaded_.memory.read_bytes(address, 32);
+            const auto id = loaded_.memory.read_u32(GuestAddress{arg(0) + 16});
+            const auto mutex = lightweight_mutexes_.find(id);
+            if (mutex == lightweight_mutexes_.end() || mutex->second != address ||
+                loaded_.memory.read_u32(GuestAddress{arg(0) + 12}) != 0)
+            {
+                throw std::runtime_error("Invalid lightweight mutex or unsupported waiters");
+            }
+            loaded_.memory.write_u32(address, 0);
+            loaded_.memory.write_u32(GuestAddress{arg(0) + 4}, 0xFFFFFFFF);
+            loaded_.memory.write_u32(GuestAddress{arg(0) + 16}, 0xFFFFFFFF);
+            lightweight_mutexes_.erase(mutex);
+            return 0;
+        }
+        case 0x293B45B8: // sceKernelGetThreadId
+            return current_thread_;
         case 0x446D8DE6: // sceKernelCreateThread
-            return create_thread(GuestAddress{arg(1)}, arg(3), arg(2));
+            return create_thread(GuestAddress{arg(1)}, arg(3), arg(2),
+                                 loaded_.memory.read_c_string(GuestAddress{arg(0)}, 32), arg(4));
+        case 0x17C1684E: // sceKernelReferThreadStatus
+        {
+            const auto id = arg(0) == 0 ? current_thread_ : arg(0);
+            const auto &thread = threads_.at(id);
+            const auto address = GuestAddress{arg(1)};
+            if (loaded_.memory.read_u32(address) != 104)
+            {
+                throw std::runtime_error("Unsupported thread status structure size");
+            }
+            // Scheduling counters and wait fields stay zero in this runtime.
+            loaded_.memory.read_bytes(address, 104);
+            loaded_.memory.write_bytes(address, Payload(104, 0));
+            loaded_.memory.write_u32(address, 104);
+            const Payload name(thread.name.begin(), thread.name.end());
+            loaded_.memory.write_bytes(GuestAddress{arg(1) + 4}, name);
+            const auto write = [&](std::uint32_t offset, std::uint32_t value)
+            { loaded_.memory.write_u32(GuestAddress{arg(1) + offset}, value); };
+            write(36, thread.attributes);
+            write(40, thread.finished || !thread.started ? 16 : (id == current_thread_ ? 1 : 2));
+            write(44, thread.entry.value_of());
+            write(48, thread.stack);
+            write(52, thread.stack_size);
+            write(56, loaded_.module.global_pointer.value_of());
+            write(60, thread.priority);
+            write(64, thread.priority);
+            write(80, thread.finished ? thread.state.registers[2] : 0);
+            return 0;
+        }
         case 0xF475845D: // sceKernelStartThread
         {
             auto &thread = threads_.at(arg(0));

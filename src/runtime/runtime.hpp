@@ -30,6 +30,15 @@ class Runtime
         std::uint32_t priority;
         bool started{};
         bool finished{};
+        GuestAddress entry;
+        std::string name;
+        std::uint32_t attributes;
+    };
+
+    struct Semaphore
+    {
+        std::uint32_t count;
+        std::uint32_t maximum;
     };
 
 public:
@@ -38,7 +47,8 @@ public:
 
 private:
     std::uint32_t allocate(std::uint32_t size, bool high);
-    std::uint32_t create_thread(GuestAddress entry, std::uint32_t stack_size, std::uint32_t priority);
+    std::uint32_t create_thread(GuestAddress entry, std::uint32_t stack_size, std::uint32_t priority, std::string name,
+                                std::uint32_t attributes);
     std::uint32_t service(CpuState &state, const ImportBinding &binding);
 
     LoadedPrx loaded_;
@@ -51,6 +61,8 @@ private:
     std::map<std::uint32_t, Thread> threads_;
     std::deque<std::uint32_t> ready_;
     std::map<std::uint32_t, std::uint32_t> blocks_;
+    std::map<std::uint32_t, GuestAddress> lightweight_mutexes_;
+    std::map<std::uint32_t, Semaphore> semaphores_;
     std::uint32_t next_id_{1};
     std::uint32_t current_thread_{};
     std::optional<int> exit_code_;
