@@ -5,16 +5,32 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace psp
 {
 
+// Mapped regions own independent byte storage. Aliases share storage within this
+// Memory; copying Memory copies all backing bytes and preserves its alias layout.
 class Memory
 {
+    struct Location
+    {
+        std::size_t region;
+        std::size_t offset;
+    };
+
 public:
     Memory(GuestAddress base_address, std::size_t size);
+    // Add a zeroed region, rejecting empty, overlapping, or wrapping mappings.
+    void map_region(GuestAddress base_address, std::size_t size);
+    // Map the entire region beginning at region_base through another address.
+    // region_base must be an existing mapping start; an alias can be its source.
+    // The new range must fit the address space and not overlap any mapping.
+    void map_alias(GuestAddress alias_base, GuestAddress region_base);
 
     std::uint8_t read_u8(GuestAddress address) const;
     std::uint16_t read_u16(GuestAddress address) const;
@@ -39,12 +55,13 @@ public:
     void write_bytes(GuestAddress address, PayloadSpan bytes);
 
 private:
-    std::size_t checked_offset(GuestAddress address, std::size_t width) const;
+    void validate_mapping(GuestAddress base_address, std::size_t size) const;
+    Location checked_location(GuestAddress address, std::size_t width) const;
     std::uint32_t read_le(GuestAddress address, std::size_t width) const;
     void write_le(GuestAddress address, std::uint32_t value, std::size_t width);
 
-    GuestAddress base_address_;
-    Payload bytes_;
+    std::vector<Payload> regions_;
+    std::map<std::uint32_t, std::size_t> mappings_;
 };
 
 } // namespace psp

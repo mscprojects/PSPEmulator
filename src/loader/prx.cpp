@@ -338,7 +338,19 @@ LoadedPrx prepare_prx(const ParsedPrx &prx, GuestAddress load_address, std::size
     {
         throw std::invalid_argument("PRX memory must fit in the 32-bit address space");
     }
+    // The canonical RAM range must fit below the two PSP alias bits.
+    if (load_address.value_of() >= 0x40000000U || memory_size > 0x40000000ULL - load_address.value_of())
+    {
+        throw std::invalid_argument("PRX RAM must fit below the PSP address alias bits");
+    }
     Memory memory(load_address, memory_size);
+    // PSP address views share backing bytes; cache behavior and privilege checks
+    // are not modeled. VRAM's specialized extra mirrors remain unsupported.
+    memory.map_alias(GuestAddress{load_address.value_of() | 0x40000000U}, load_address);
+    memory.map_alias(GuestAddress{load_address.value_of() | 0x80000000U}, load_address);
+    memory.map_alias(GuestAddress{load_address.value_of() | 0xC0000000U}, load_address);
+    memory.map_region(GuestAddress{0x04000000}, 0x00200000);
+    memory.map_alias(GuestAddress{0x44000000}, GuestAddress{0x04000000});
     const auto segments = load_segments(memory, prx.segments, load_address, memory_size);
     const auto entry = checked_address(static_cast<std::uint64_t>(load_address.value_of()) + prx.entry_offset);
     require_word_aligned(entry);

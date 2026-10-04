@@ -390,6 +390,18 @@ TEST(ExecutionTest, ThreadStatusReportsStackSizeAndRejectsUnsupportedLayouts)
     EXPECT_THROW(execute_prx(read_prx(program.fixture.bytes)), std::runtime_error);
 }
 
+TEST(ExecutionTest, GuestStoresAndLoadsUseSharedVramAliases)
+{
+    test::PrxFixture fixture;
+    fixture.word(0x100, 0x3C040400); // lui $a0, 0x0400: cached VRAM
+    fixture.word(0x104, 0x3C054400); // lui $a1, 0x4400: uncached VRAM
+    fixture.word(0x108, 0x24060055); // li $a2, 0x55: pixel bytes
+    fixture.word(0x10C, 0xAC860000); // sw $a2, 0($a0)
+    fixture.word(0x110, 0x03E00008); // jr $ra
+    fixture.word(0x114, 0x8CA20000); // lw $v0, 0($a1), in return delay slot
+    EXPECT_EQ(execute_prx(read_prx(fixture.bytes)).exit_code, 0x55);
+}
+
 TEST(ExecutionTest, ReturnsGuestStatusAndCountsTheReturnDelaySlot)
 {
     test::PrxFixture fixture;

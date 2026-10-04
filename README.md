@@ -21,7 +21,7 @@ cmake --build build --parallel
 
 `just format` formats C++ files under `src/` with `clang-format`. `just ci` checks formatting, tests with GCC and Clang, runs clang-tidy on project source and headers, then builds and tests with address and undefined behavior sanitizers.
 
-The first core component is a single contiguous `psp::Memory` region. It accepts `psp::GuestAddress` values, starts zeroed, reads and writes 8-, 16-, and 32-bit values in little-endian order, permits unaligned access, and throws `std::out_of_range` when an access crosses its boundaries. The CPU will later decide which accesses require alignment checks.
+`psp::Memory` owns zeroed regions and explicit aliases sharing their backing bytes. PRX execution maps configured RAM with its PSP address views and 2 MiB of VRAM at `0x04000000`, also accessible at `0x44000000`. Reads and writes remain little-endian; the CPU applies instruction-specific alignment checks. Nonempty accesses must fit within one mapping and invalid accesses throw `std::out_of_range`. See [guest memory](docs/memory.md) for the layout, ownership, and current limits.
 
 Project tests live beside the code they cover, under each component's `tests/` directory. Upstream PSP tests and the `strong_type` library are pinned in `third_party/` as submodules. After cloning, initialize them with `git submodule update --init --recursive`.
 

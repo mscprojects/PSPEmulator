@@ -6,6 +6,7 @@
 
 Each component has one header and one implementation file. Related kernel services stay together in `kernel.hpp` and `kernel.cpp`; file size alone is not a reason to split them.
 
+- `Memory` owns RAM and VRAM backing bytes and shared address aliases, initialized by `prepare_prx()`. See [guest memory](memory.md) for the execution layout and access rules.
 - `Cpu` executes one Allegrex instruction against guest memory and the supplied `CpuState`.
 - `Kernel` owns saved CPU states, thread creation metadata, the ready queue, guest time, delay deadlines, interrupt masking and pending events, execution termination, mutex identities, semaphore counts, partition block addresses, and the shared object-ID counter. Each thread has an explicit created, started, waiting, or finished lifecycle; started threads are reported as running or ready according to the selected thread ID. The kernel allocates thread stacks and partition blocks from one monotonic arena, using explicit low and high allocation directions. Allocation state and block IDs have the same owner; reclamation remains unsupported. Guest mutex work areas remain authoritative for ownership and recursive counts; mutex operations use the kernel's current thread ID.
 - `GuestIo` owns captured output and the autotest emulator device protocol. It exposes no host filesystem or display.

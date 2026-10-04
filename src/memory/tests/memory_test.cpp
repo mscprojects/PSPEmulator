@@ -124,6 +124,116 @@ TEST(MemoryTest, ReadsRangesAndStringsAtTheEndOfTheAddressSpace)
     EXPECT_THROW(memory.read_c_string(GuestAddress{0xFFFFFFFE}, 4096), std::out_of_range);
 }
 
+TEST(MemoryTest, RegionsAreIndependentAndAliasesShareScalarAccesses)
+{
+    Memory memory(GuestAddress{0x08800000}, 8);
+    memory.map_alias(GuestAddress{0x48800000}, GuestAddress{0x08800000});
+    memory.map_alias(GuestAddress{0x88800000}, GuestAddress{0x08800000});
+    memory.map_alias(GuestAddress{0xC8800000}, GuestAddress{0x88800000}); // Alias of an alias.
+    memory.map_region(GuestAddress{0x04000000}, 8);
+    memory.map_alias(GuestAddress{0x44000000}, GuestAddress{0x04000000});
+    EXPECT_EQ(memory.read_u32(GuestAddress{0x44000000}), 0U);
+    memory.write_u32(GuestAddress{0x48800001}, 0x12345678); // Unaligned writes still work.
+    EXPECT_EQ(memory.read_u32(GuestAddress{0x08800001}), 0x12345678U);
+    EXPECT_EQ(memory.read_u16(GuestAddress{0x88800002}), 0x3456U);
+    memory.write_u8(GuestAddress{0xC8800004}, 0xAB);
+    EXPECT_EQ(memory.read_u32(GuestAddress{0x48800001}), 0xAB345678U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{0x04000001}), 0U);
+    memory.write_u16(GuestAddress{0x44000002}, 0xCD12);
+    EXPECT_EQ(memory.read_u32(GuestAddress{0x04000000}), 0xCD120000U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{0x88800001}), 0xAB345678U);
+}
+
+TEST(MemoryTest, AliasesSupportByteRangesCallerStorageAndStrings)
+{
+    Memory memory(GuestAddress{0x04000000}, 5);
+    memory.map_alias(GuestAddress{0x44000000}, GuestAddress{0x04000000});
+    const Payload original{'a', 'b', 0, 0xFF, 0x55};
+    memory.write_bytes(GuestAddress{0x44000000}, original);
+    EXPECT_EQ(memory.read_bytes(GuestAddress{0x04000000}, 5), original);
+    EXPECT_EQ(memory.read_c_string(GuestAddress{0x44000000}, 4096), "ab");
+    std::array<std::uint8_t, 3> destination{};
+    memory.read_into(GuestAddress{0x44000002}, std::as_writable_bytes(std::span{destination}));
+    EXPECT_EQ(destination, (std::array<std::uint8_t, 3>{0, 0xFF, 0x55}));
+    EXPECT_THROW(memory.read_into(GuestAddress{0x44000003}, std::as_writable_bytes(std::span{destination})),
+                 std::out_of_range);
+    EXPECT_EQ(destination, (std::array<std::uint8_t, 3>{0, 0xFF, 0x55}));
+    EXPECT_THROW(memory.write_bytes(GuestAddress{0x44000004}, Payload{1, 2}), std::out_of_range);
+    EXPECT_EQ(memory.read_bytes(GuestAddress{0x04000000}, 5), original);
+    EXPECT_THROW(memory.read_c_string(GuestAddress{0x44000003}, 4096), std::out_of_range);
+    EXPECT_THROW(memory.read_c_string(GuestAddress{0x44000000}, 2), std::runtime_error);
+    EXPECT_TRUE(memory.read_bytes(GuestAddress{0xFFFFFFFF}, 0).empty());
+    EXPECT_NO_THROW(memory.write_bytes(GuestAddress{0xFFFFFFFF}, {}));
+    EXPECT_NO_THROW(memory.read_into(GuestAddress{0xFFFFFFFF}, {}));
+}
+
+TEST(MemoryTest, MappingRejectsOverlapsInvalidSourcesAndAddressWrapWithoutChangingData)
+{
+    Memory memory(GuestAddress{100}, 8);
+    memory.write_u32(GuestAddress{100}, 0x12345678);
+    memory.map_alias(GuestAddress{200}, GuestAddress{100});
+    for (const auto base : {93U, 100U, 104U, 107U, 193U, 200U, 207U})
+    {
+        SCOPED_TRACE(base);
+        EXPECT_THROW(memory.map_region(GuestAddress{base}, 8), std::invalid_argument);
+        EXPECT_THROW(memory.map_alias(GuestAddress{base}, GuestAddress{100}), std::invalid_argument);
+    }
+    EXPECT_THROW(memory.map_alias(GuestAddress{300}, GuestAddress{101}), std::invalid_argument);
+    EXPECT_THROW(memory.map_region(GuestAddress{300}, 0), std::invalid_argument);
+    EXPECT_THROW(memory.map_region(GuestAddress{0xFFFFFFFC}, 8), std::invalid_argument);
+    EXPECT_THROW(memory.map_alias(GuestAddress{0xFFFFFFFC}, GuestAddress{100}), std::invalid_argument);
+    EXPECT_EQ(memory.read_u32(GuestAddress{100}), 0x12345678U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{200}), 0x12345678U);
+    EXPECT_THROW(memory.read_u8(GuestAddress{300}), std::out_of_range);
+    memory.map_region(GuestAddress{108}, 8); // Adjacent regions are allowed.
+    memory.map_region(GuestAddress{0xFFFFFFF8}, 8);
+    memory.map_alias(GuestAddress{0x40000000}, GuestAddress{0xFFFFFFF8});
+    memory.write_u8(GuestAddress{0x40000007}, 0xAB);
+    EXPECT_EQ(memory.read_u8(GuestAddress{0xFFFFFFFF}), 0xAB);
+}
+
+TEST(MemoryTest, AccessesCannotCrossRegionsOrAliasBoundaries)
+{
+    Memory memory(GuestAddress{100}, 4);
+    memory.map_region(GuestAddress{104}, 4);
+    memory.map_alias(GuestAddress{200}, GuestAddress{100});
+    memory.map_alias(GuestAddress{204}, GuestAddress{104});
+    memory.write_bytes(GuestAddress{100}, Payload{1, 2, 3, 4});
+    memory.write_bytes(GuestAddress{104}, Payload{5, 6, 7, 8});
+    for (const auto base : {100U, 200U})
+    {
+        SCOPED_TRACE(base);
+        EXPECT_THROW(memory.read_u16(GuestAddress{base + 3}), std::out_of_range);
+        EXPECT_THROW(memory.write_u32(GuestAddress{base + 1}, 0), std::out_of_range);
+        EXPECT_THROW(memory.read_bytes(GuestAddress{base + 2}, 4), std::out_of_range);
+        EXPECT_THROW(memory.write_bytes(GuestAddress{base + 3}, Payload{0, 0}), std::out_of_range);
+        EXPECT_THROW(memory.read_c_string(GuestAddress{base}, 5), std::out_of_range);
+        EXPECT_EQ(memory.read_bytes(GuestAddress{base}, 4), (Payload{1, 2, 3, 4}));
+        EXPECT_EQ(memory.read_bytes(GuestAddress{base + 4}, 4), (Payload{5, 6, 7, 8}));
+    }
+    EXPECT_THROW(memory.read_u8(GuestAddress{99}), std::out_of_range);
+    EXPECT_THROW(memory.read_u8(GuestAddress{108}), std::out_of_range);
+    EXPECT_THROW(memory.read_u8(GuestAddress{199}), std::out_of_range);
+    EXPECT_THROW(memory.read_u8(GuestAddress{208}), std::out_of_range);
+}
+
+TEST(MemoryTest, MemoryCopiesOwnTheirBytesAndKeepAliasesWithinTheCopy)
+{
+    Memory original(GuestAddress{0x08800000}, 4);
+    original.map_region(GuestAddress{0x04000000}, 4);
+    original.map_alias(GuestAddress{0x44000000}, GuestAddress{0x04000000});
+    original.write_u32(GuestAddress{0x04000000}, 0x12345678);
+    auto copy = original;
+    copy.write_u32(GuestAddress{0x44000000}, 0xAAAAAAAA);
+    EXPECT_EQ(copy.read_u32(GuestAddress{0x04000000}), 0xAAAAAAAAU);
+    EXPECT_EQ(original.read_u32(GuestAddress{0x44000000}), 0x12345678U);
+    // Adding regions must not invalidate alias references to existing storage.
+    copy.map_region(GuestAddress{0x1000}, 4);
+    copy.write_u32(GuestAddress{0x04000000}, 0xBBBBBBBB);
+    EXPECT_EQ(copy.read_u32(GuestAddress{0x44000000}), 0xBBBBBBBBU);
+    EXPECT_EQ(original.read_u32(GuestAddress{0x04000000}), 0x12345678U);
+}
+
 TEST(MemoryTest, RejectsInvalidRegions)
 {
     EXPECT_THROW(Memory(GuestAddress{0}, 0), std::invalid_argument);
