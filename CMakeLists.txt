@@ -35,7 +35,14 @@ add_library(psp_core
     src/loader/prx_reader.cpp
     src/loader/prx.cpp
     src/runtime/execution.cpp
+    src/runtime/guest_allocator.cpp
+    src/runtime/guest_io.cpp
+    src/runtime/guest_structures.cpp
+    src/runtime/kernel.cpp
     src/runtime/runtime.cpp
+    src/runtime/synchronization.cpp
+    src/runtime/syscall_dispatcher.cpp
+    src/runtime/threads.cpp
 )
 target_include_directories(psp_core PUBLIC src)
 target_link_libraries(psp_core PUBLIC project_options strong_type::strong_type PRIVATE fmt::fmt)
@@ -55,6 +62,8 @@ if(BUILD_TESTING)
         src/loader/tests/prx_test.cpp
         src/loader/tests/prx_reader_test.cpp
         src/runtime/tests/execution_test.cpp
+        src/runtime/tests/guest_structures_test.cpp
+        src/runtime/tests/kernel_test.cpp
     )
     target_link_libraries(psp_tests PRIVATE psp_core GTest::gtest_main)
     target_compile_definitions(psp_tests PRIVATE PSPAUTOTESTS_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/third_party/pspautotests")

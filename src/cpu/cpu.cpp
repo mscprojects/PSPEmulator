@@ -37,7 +37,7 @@ Cpu::Cpu(Memory &memory) : memory_(memory)
 {
 }
 
-std::optional<std::uint32_t> Cpu::step(CpuState &state)
+std::optional<Syscall> Cpu::step(CpuState &state)
 {
     if ((state.program_counter.value_of() & kWordAlignmentMask) != 0)
     {
@@ -48,10 +48,10 @@ std::optional<std::uint32_t> Cpu::step(CpuState &state)
     state.registers[0] = 0;
     ControlFlow flow{state.next_program_counter,
                      GuestAddress{state.next_program_counter.value_of() + kInstructionSize}};
-    std::optional<std::uint32_t> syscall;
+    std::optional<Syscall> syscall;
     if ((instruction & 0xFC00003FU) == 0x0000000CU)
     {
-        syscall = (instruction >> 6) & 0xFFFFFU;
+        syscall = Syscall{(instruction >> 6) & 0xFFFFFU, state.program_counter};
     }
     else
     {

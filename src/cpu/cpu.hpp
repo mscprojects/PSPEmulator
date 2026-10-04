@@ -10,6 +10,14 @@
 namespace psp
 {
 
+// Instruction event for the runtime's HLE dispatcher, not a service result or NID.
+struct Syscall
+{
+    std::uint32_t code;
+    GuestAddress instruction_address;
+    bool operator==(const Syscall &) const = default;
+};
+
 // Shared instruction interpreter; architectural state is supplied for each step.
 class Cpu
 {
@@ -34,7 +42,7 @@ public:
 
     // Execute one instruction. A SYSCALL reports its code after committing control
     // flow; the runtime handles it before executing the next instruction.
-    std::optional<std::uint32_t> step(CpuState &state);
+    std::optional<Syscall> step(CpuState &state);
 
 private:
     void execute(CpuState &state, std::uint32_t instruction, ControlFlow &flow);

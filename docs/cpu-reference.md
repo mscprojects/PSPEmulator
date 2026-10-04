@@ -61,7 +61,7 @@ The [runtime integration tests](../src/runtime/tests/execution_test.cpp) execute
 
 ## Runtime boundary
 
-`Cpu::step(CpuState &)` returns an optional syscall code after committing instruction control flow. In an import stub, `JR $ra` schedules the return and its delay-slot `SYSCALL` reports a service to the runtime. The runtime dispatches it by library name and NID, supplies results in guest registers, and resumes execution at the committed return target. CPU instruction semantics do not depend on PSP service implementations.
+`Cpu::step(CpuState &)` returns an optional `Syscall` event containing its encoded code and instruction address after committing instruction control flow. In an import stub, `JR $ra` schedules the return and its delay-slot `SYSCALL` reports a service to the runtime. `SyscallDispatcher` resolves the code to a library name and NID, translates register arguments into named service operations, and supplies results in guest registers. Execution resumes at the committed return target. CPU instruction semantics do not depend on PSP service implementations. See [runtime and syscall handling](runtime.md) for component ownership, guest structures, and scheduling behavior.
 
 Byte and halfword loads and stores (`LB`, `LBU`, `LH`, `LHU`, `SB`, `SH`) support the compiled startup and libc code. Signed loads extend their sign bits; unsigned loads zero-extend. Halfword and word accesses require their respective alignments. Memory bounds are checked before a register or memory write.
 

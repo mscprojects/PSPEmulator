@@ -307,8 +307,19 @@ TEST(CpuTest, ReportsSyscallsAfterCommittingTheReturnDelaySlot)
     state.registers[31] = kProgramBase + 16;
     EXPECT_FALSE(cpu.step(state));
     EXPECT_EQ(state.program_counter, GuestAddress{kProgramBase + 4});
-    EXPECT_EQ(cpu.step(state), 123U);
+    EXPECT_EQ(cpu.step(state), (Syscall{123U, GuestAddress{kProgramBase + 4}}));
     EXPECT_EQ(state.program_counter, GuestAddress{kProgramBase + 16});
+}
+
+TEST(CpuTest, ReportsZeroAndMaximumSyscallCodesWithTheirInstructionAddresses)
+{
+    Memory memory(GuestAddress{kProgramBase}, 32);
+    load_program(memory, {0xC, (0xFFFFFU << 6) | 0xC, 0});
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
+    Cpu cpu(memory);
+    EXPECT_EQ(cpu.step(state), (Syscall{0, GuestAddress{kProgramBase}}));
+    EXPECT_EQ(cpu.step(state), (Syscall{0xFFFFF, GuestAddress{kProgramBase + 4}}));
+    EXPECT_FALSE(cpu.step(state));
 }
 
 TEST(CpuTest, ExecutesEveryIntegerBranchVariant)
