@@ -30,18 +30,21 @@ SyscallDispatcher::SyscallDispatcher(Memory &memory, Kernel &kernel, GuestIo &io
     }
 }
 
-void SyscallDispatcher::handle(const Syscall &syscall, CpuState &state, std::uint64_t instructions)
+void SyscallDispatcher::handle(const Syscall &syscall, CpuState &state)
 {
     if (syscall.code == 0 || syscall.code > imports_.size())
     {
         throw std::runtime_error(fmt::format("Unbound syscall 0x{:x}", syscall.code));
     }
-    state.registers[2] = dispatch(state, imports_[syscall.code - 1], instructions);
+    if (const auto result = dispatch(state, imports_[syscall.code - 1]))
+    {
+        state.registers[2] = *result;
+    }
 }
 
-std::uint32_t SyscallDispatcher::dispatch(CpuState &state, const ImportBinding &binding, std::uint64_t instructions)
+std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const ImportBinding &binding)
 {
-    // Allegrex integer service arguments occupy a0-a3 and t0-t3 (registers 4-11).
+    // PSP MIPS32 EABI integer arguments occupy a0-a7 (registers 4-11).
     const auto arg = [&](std::size_t index) { return state.registers.at(4 + index); };
     if (binding.library == "ThreadManForUser")
     {
@@ -74,9 +77,14 @@ std::uint32_t SyscallDispatcher::dispatch(CpuState &state, const ImportBinding &
             write_thread_info(memory_, address, info);
             return 0;
         }
-        case 0x82BC5777: // sceKernelGetSystemTimeWide: deterministic logical time.
-            state.registers[3] = static_cast<std::uint32_t>(instructions >> 32);
-            return static_cast<std::uint32_t>(instructions);
+        case 0x369ED59D: // sceKernelGetSystemTimeLow
+            return static_cast<std::uint32_t>(kernel_.system_time());
+        case 0x82BC5777: // sceKernelGetSystemTimeWide
+            state.registers[3] = static_cast<std::uint32_t>(kernel_.system_time() >> 32);
+            return static_cast<std::uint32_t>(kernel_.system_time());
+        case 0xCEADEB47: // sceKernelDelayThread(a0: microseconds)
+            kernel_.delay_thread(arg(0));
+            return std::nullopt;
         case 0x19CFF145: // sceKernelCreateLwMutex
             kernel_.create_mutex({.work_area = GuestAddress{arg(0)},
                                   .name = GuestAddress{arg(1)},

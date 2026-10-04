@@ -25,6 +25,7 @@ enum class ThreadStatus : std::uint8_t
 {
     Running = 1,
     Ready = 2,
+    Waiting = 4,
     Stopped = 16,
 };
 

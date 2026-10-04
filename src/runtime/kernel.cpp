@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -88,9 +89,19 @@ bool Kernel::select_next_thread()
         return false;
     }
     auto &thread = threads_.at(current_thread_);
-    if (thread.state.program_counter == return_address_ || thread.lifecycle == Lifecycle::Finished)
+    if (thread.lifecycle == Lifecycle::Started && thread.state.program_counter == return_address_)
     {
         thread.lifecycle = Lifecycle::Finished;
+    }
+    const bool select_ready = thread.lifecycle != Lifecycle::Started;
+    wake_delayed_threads();
+    if (select_ready)
+    {
+        if (ready_.empty() && !delayed_.empty())
+        {
+            system_time_ = delayed_.begin()->first;
+            wake_delayed_threads();
+        }
         if (ready_.empty())
         {
             exit_code_ = std::bit_cast<std::int32_t>(thread.state.registers[2]);
@@ -115,6 +126,35 @@ std::uint32_t Kernel::current_thread_id() const
 std::uint32_t Kernel::current_thread_priority() const
 {
     return threads_.at(current_thread_).creation.priority;
+}
+
+void Kernel::delay_thread(std::uint32_t microseconds)
+{
+    if (microseconds > std::numeric_limits<std::uint64_t>::max() - system_time_)
+    {
+        throw std::overflow_error("Guest delay exceeds clock range");
+    }
+    auto &thread = threads_.at(current_thread_);
+    if (thread.lifecycle != Lifecycle::Started)
+    {
+        throw std::logic_error("Only a running thread can delay");
+    }
+    delayed_.emplace(system_time_ + microseconds, current_thread_);
+    thread.lifecycle = Lifecycle::Waiting;
+}
+
+void Kernel::advance_time(std::uint64_t microseconds)
+{
+    if (microseconds > std::numeric_limits<std::uint64_t>::max() - system_time_)
+    {
+        throw std::overflow_error("Guest clock overflow");
+    }
+    system_time_ += microseconds;
+}
+
+std::uint64_t Kernel::system_time() const
+{
+    return system_time_;
 }
 
 void Kernel::exit_thread()
@@ -153,6 +193,11 @@ GuestThreadInfo Kernel::thread_status(std::uint32_t id) const
     {
         status = id == current_thread_ ? ThreadStatus::Running : ThreadStatus::Ready;
     }
+    if (thread.lifecycle == Lifecycle::Waiting)
+    {
+        status = ThreadStatus::Waiting;
+        info.wait_type = 2; // PSP delay wait; no object ID.
+    }
     info.status = static_cast<std::uint32_t>(status);
     info.entry = creation.entry.value_of();
     info.stack = thread.stack.value_of();
@@ -161,7 +206,7 @@ GuestThreadInfo Kernel::thread_status(std::uint32_t id) const
     info.initial_priority = creation.priority;
     info.current_priority = creation.priority;
     info.exit_status = thread.lifecycle == Lifecycle::Finished ? thread.state.registers[2] : 0;
-    // Wait and scheduling counters remain zero in this cooperative runtime.
+    // Scheduling counters remain zero in this cooperative runtime.
     return info;
 }
 
@@ -320,6 +365,19 @@ void Kernel::place_arguments(Thread &thread, PayloadSpan arguments)
     thread.state.registers[4] = static_cast<std::uint32_t>(arguments.size());
     thread.state.registers[5] = address;
     thread.state.registers[29] = (address & ~15U) - 64;
+}
+
+void Kernel::wake_delayed_threads()
+{
+    while (!delayed_.empty() && delayed_.begin()->first <= system_time_)
+    {
+        const auto id = delayed_.begin()->second;
+        auto &thread = threads_.at(id);
+        thread.state.registers[2] = 0; // sceKernelDelayThread completed successfully.
+        thread.lifecycle = Lifecycle::Started;
+        ready_.push_back(id);
+        delayed_.erase(delayed_.begin());
+    }
 }
 
 GuestMutexWorkArea Kernel::mutex_work_area(GuestAddress address) const

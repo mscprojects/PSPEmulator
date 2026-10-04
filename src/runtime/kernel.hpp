@@ -48,7 +48,8 @@ struct SemaphoreCreation
 };
 
 // Owns threads, scheduling, synchronization, allocations, and kernel object IDs.
-// Blocking waits, callbacks, timeouts, and preemption remain unsupported.
+// Delays use guest microseconds; synchronization waits, callbacks, and preemption
+// remain unsupported.
 class Kernel
 {
     enum class AllocationDirection : std::uint8_t
@@ -61,6 +62,7 @@ class Kernel
     {
         Created,
         Started,
+        Waiting,
         Finished,
     };
 
@@ -86,12 +88,20 @@ public:
     void initialize(GuestAddress entry, std::span<const std::string> arguments);
     std::uint32_t create_thread(ThreadCreation creation);
     void start_thread(std::uint32_t id, GuestAddress arguments, std::uint32_t argument_size);
-    // Complete a returning/exited thread and select the next ready one. False
+    // Wake elapsed delays, complete returning/exited threads, and select a ready
+    // thread. If all threads are waiting, advance time to the next wakeup. False
     // means execution has ended; no thread switch occurs inside Cpu::step().
     bool select_next_thread();
     CpuState &current_thread_state();
     std::uint32_t current_thread_id() const;
     std::uint32_t current_thread_priority() const;
+    // Delay the current thread; v0 is supplied when the delay expires. A zero
+    // delay yields to already-ready threads without advancing guest time.
+    void delay_thread(std::uint32_t microseconds);
+    // Runtime currently advances one microsecond per instruction, a provisional
+    // deterministic rate rather than a cycle-accurate CPU clock.
+    void advance_time(std::uint64_t microseconds);
+    std::uint64_t system_time() const;
     void exit_thread();
     void exit_game();
     int exit_code() const;
@@ -115,6 +125,7 @@ private:
     // may cross the other; reclamation remains unsupported.
     GuestAddress allocate_memory(std::uint32_t size, AllocationDirection direction);
     void place_arguments(Thread &thread, PayloadSpan arguments);
+    void wake_delayed_threads();
     GuestMutexWorkArea mutex_work_area(GuestAddress address) const;
     void validate_mutex_count(const GuestMutexWorkArea &work_area, std::uint32_t count) const;
 
@@ -128,6 +139,8 @@ private:
     std::map<std::uint32_t, Thread> threads_;
     std::deque<std::uint32_t> ready_;
     std::uint32_t current_thread_{};
+    std::uint64_t system_time_{};
+    std::multimap<std::uint64_t, std::uint32_t> delayed_;
     std::optional<int> exit_code_;
     std::map<std::uint32_t, GuestAddress> mutexes_;
     std::map<std::uint32_t, Semaphore> semaphores_;

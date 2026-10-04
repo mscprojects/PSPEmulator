@@ -5,6 +5,7 @@
 #include "runtime/guest_io.hpp"
 #include "runtime/kernel.hpp"
 
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -23,12 +24,11 @@ class SyscallDispatcher
 
 public:
     SyscallDispatcher(Memory &memory, Kernel &kernel, GuestIo &io, std::span<const PrxImportLibrary> imports);
-    // Current services complete synchronously or throw. If blocking waits are
-    // introduced, their return register must be supplied on wake-up instead.
-    void handle(const Syscall &syscall, CpuState &state, std::uint64_t instructions);
+    // A delayed service leaves v0 untouched until Kernel wakes the thread.
+    void handle(const Syscall &syscall, CpuState &state);
 
 private:
-    std::uint32_t dispatch(CpuState &state, const ImportBinding &binding, std::uint64_t instructions);
+    std::optional<std::uint32_t> dispatch(CpuState &state, const ImportBinding &binding);
 
     Memory &memory_;
     Kernel &kernel_;

@@ -16,7 +16,7 @@ namespace psp
 namespace
 {
 
-// Small guest program with up to three service imports and a separate work area.
+// Small guest program with service imports and a separate work area.
 class ServicePrxFixture
 {
 public:
@@ -146,6 +146,73 @@ TEST(ExecutionTest, RejectsUnboundSyscallCodes)
             EXPECT_NE(std::string(error.what()).find("Unbound syscall"), std::string::npos);
         }
     }
+}
+
+TEST(ExecutionTest, GuestDelayAdvancesBothTimeServicesAndReturnsSuccess)
+{
+    ServicePrxFixture program("ThreadManForUser", {0x369ED59D, 0x82BC5777, 0xCEADEB47});
+    program.call(0);
+    program.instruction(0x00408021); // move $s0, $v0: initial low time
+    program.argument(0, 2000);
+    program.call(2);
+    program.instruction(0x00408821); // move $s1, $v0: delay result
+    program.call(1);
+    program.instruction(0x00501023); // subu $v0, $v0, $s0: elapsed time
+    program.instruction(0x00511021); // addu $v0, $v0, $s1: include the delay result
+    const auto parsed = program.finish();
+    ExecutionOptions options;
+    options.max_instructions = 100; // Sleeping does not consume the CPU budget.
+    const auto result = execute_prx(parsed, options);
+    EXPECT_GE(result.exit_code, 2000);
+    EXPECT_LT(result.exit_code, 2100);
+    EXPECT_LT(result.instructions_executed, 100U);
+    EXPECT_EQ(execute_prx(parsed, options).exit_code, result.exit_code);
+    program.fixture.word(0x200 + 4, 0x369ED59D); // Read the same clock via the low service.
+    EXPECT_EQ(execute_prx(read_prx(program.fixture.bytes), options).exit_code, result.exit_code);
+}
+
+TEST(ExecutionTest, WideSystemTimeCarriesIntoV1AndLowTimeWraps)
+{
+    ServicePrxFixture program("ThreadManForUser", {0x369ED59D, 0x82BC5777, 0xCEADEB47});
+    program.argument(0, 0xFFFFFFFF);
+    program.call(2);
+    program.call(1);
+    program.instruction(0x00608021); // move $s0, $v1
+    program.instruction(0x00408821); // move $s1, $v0
+    program.call(0);
+    program.instruction(0x00511023); // subu $v0, $v0, $s1
+    program.instruction(0x2C420064); // sltiu $v0, $v0, 100: low time is still nearby
+    program.instruction(0x00501024); // and $v0, $v0, $s0: high word must be one
+    EXPECT_EQ(execute_prx(program.finish()).exit_code, 1);
+}
+
+TEST(ExecutionTest, DelayRunsAnotherGuestThreadAndResumesTheCaller)
+{
+    ServicePrxFixture program("ThreadManForUser", {0x446D8DE6, 0xF475845D, 0xCEADEB47});
+    program.fixture.name(0x280, "worker");
+    program.argument(0, 0x08800180);
+    program.argument(1, 0x08800400); // worker code at file offset 0x500
+    program.argument(2, 0x30);
+    program.argument(3, 0x1000);
+    program.argument(4, 0);
+    program.call(0);
+    program.instruction(0x00402021); // move $a0, $v0: worker UID
+    program.argument(1, 0);
+    program.argument(2, 0);
+    program.call(1);
+    program.argument(0, 2000);
+    program.call(2);
+    program.argument(0, 0x08800480); // marker in guest BSS
+    program.instruction(0x8C840000); // lw $a0, 0($a0)
+    program.instruction(0x00441021); // addu $v0, $v0, $a0: success plus worker marker
+    program.finish();
+    program.offset = 0x500;
+    program.argument(0, 0x08800480);
+    program.instruction(0x24050055); // li $a1, 0x55
+    program.instruction(0xAC850000); // sw $a1, 0($a0)
+    program.instruction(0x03E00008); // jr $ra: worker return sentinel
+    program.instruction(0x24020007); // worker exits with 7, not the execution result
+    EXPECT_EQ(execute_prx(read_prx(program.fixture.bytes)).exit_code, 0x55);
 }
 
 TEST(ExecutionTest, CreatesLightweightMutexWorkAreaAndDeletesItsIdentity)

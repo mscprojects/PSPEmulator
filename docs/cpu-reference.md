@@ -71,7 +71,7 @@ CPU tests cover every byte offset, negative offsets, left/right pairs in both or
 
 The [bundled PSP hardware test](../third_party/pspautotests/tests/cpu/lsu/llsc.c) and [expected output](../third_party/pspautotests/tests/cpu/lsu/llsc.expected), pinned at [1885ee4](https://github.com/hrydgard/pspautotests/blob/1885ee4ed34a03477066b249667ff90813d6b7e0/tests/cpu/lsu/llsc.c), define the Allegrex-specific behavior: ordinary loads and stores leave the bit set, `SC` can target a different address, and successful `SC` does not clear the bit. CPU tests cover those cases, repeated failures, syscall invalidation and rearming, signed offsets, register aliasing, `$zero`, saved-state copies, and faults that preserve the uncommitted instruction state.
 
-The bundled `llsc.prx` now reaches `sceKernelGetSystemTimeLow` (`ThreadManForUser`, NID `0x369ED59D`), which remains unsupported. The complete test also needs thread delays and timer interrupts. Interrupt delivery and guest exception entry remain unimplemented; host-reported CPU faults retain the existing retry behavior rather than simulating exception entry. Future interrupt delivery must clear the link bit.
+The runtime supports `sceKernelGetSystemTimeLow` and `sceKernelDelayThread`, so bundled `llsc.prx` can execute its syscall and delay cases. Its hardware-interrupt case still needs interrupt delivery: the long spin currently leaves the link bit set and produces a successful `SC` instead of the expected failure. Interrupt delivery and guest exception entry remain unimplemented; host-reported CPU faults retain the existing retry behavior rather than simulating exception entry. Future interrupt delivery must clear the link bit.
 
 ## Runtime boundary
 

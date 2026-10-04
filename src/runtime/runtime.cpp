@@ -34,9 +34,10 @@ ExecutionResult Runtime::run()
             }
             const auto syscall = cpu_.step(state);
             ++instructions_;
+            kernel_.advance_time(1);
             if (syscall)
             {
-                dispatcher_.handle(*syscall, state, instructions_);
+                dispatcher_.handle(*syscall, state);
             }
         }
         catch (const std::exception &error)
