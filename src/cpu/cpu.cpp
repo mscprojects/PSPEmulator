@@ -51,6 +51,7 @@ std::optional<Syscall> Cpu::step(CpuState &state)
     std::optional<Syscall> syscall;
     if ((instruction & 0xFC00003FU) == 0x0000000CU)
     {
+        state.load_linked = false;
         syscall = Syscall{(instruction >> 6) & 0xFFFFFU, state.program_counter};
     }
     else
@@ -248,6 +249,20 @@ void Cpu::execute(CpuState &state, std::uint32_t instruction, ControlFlow &flow)
         const auto word = memory_.read_u32(aligned);
         const auto mask = 0xFFFFFFFFU << shift;
         memory_.write_u32(aligned, (word & ~mask) | (state.registers[target] << shift));
+        break;
+    }
+    case 0x30: // LL: load an aligned word and set the Allegrex link bit.
+        write_register(state, target, memory_.read_u32(data_address(state, instruction, DataAlignment::Word)));
+        state.load_linked = true;
+        break;
+    case 0x38: // SC: store when linked, then report success in rt. Allegrex keeps the bit set.
+    {
+        const auto address = data_address(state, instruction, DataAlignment::Word);
+        if (state.load_linked)
+        {
+            memory_.write_u32(address, state.registers[target]);
+        }
+        write_register(state, target, static_cast<std::uint32_t>(state.load_linked));
         break;
     }
     default:

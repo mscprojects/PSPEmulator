@@ -17,6 +17,8 @@ struct CpuState
     std::array<std::uint32_t, 32> registers{};
     std::uint32_t high_register{};
     std::uint32_t low_register{};
+    // Allegrex LL/SC uses a link bit, without tracking a reserved address.
+    bool load_linked{};
 
     bool operator==(const CpuState &) const = default;
 };

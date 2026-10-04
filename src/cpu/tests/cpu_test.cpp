@@ -445,6 +445,176 @@ TEST(CpuTest, PartialWordFaultsPreserveRegistersMemoryAndPendingControlFlow)
     }
 }
 
+TEST(CpuTest, StoreConditionalFailsWithoutLoadLinkedAndDoesNotWriteMemory)
+{
+    Memory memory(GuestAddress{kProgramBase}, 128);
+    load_program(memory, {0xE1090000, 0xE10A0004}); // sc $t1, 0($t0); sc $t2, 4($t0)
+    memory.write_u32(GuestAddress{kProgramBase + 64}, 0x11111111);
+    memory.write_u32(GuestAddress{kProgramBase + 68}, 0x22222222);
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
+    state.registers[8] = kProgramBase + 64;
+    state.registers[9] = 0xAAAAAAAA;
+    state.registers[10] = 0xBBBBBBBB;
+    Cpu cpu(memory);
+    step_n(cpu, state, 2);
+    EXPECT_EQ(state.registers[9], 0U);
+    EXPECT_EQ(state.registers[10], 0U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 64}), 0x11111111U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 68}), 0x22222222U);
+    EXPECT_FALSE(state.load_linked);
+}
+
+TEST(CpuTest, AllegrexLinkSurvivesOrdinaryMemoryAccessAndAnotherLoadLinked)
+{
+    // These intervening operations all preserve the link in llsc.expected.
+    for (const auto between : {0U, 0xAD0B0000U, 0xAD0B0004U, 0x8D0C0000U, 0xC10C0004U})
+    {
+        SCOPED_TRACE(between);
+        Memory memory(GuestAddress{kProgramBase}, 128);
+        load_program(memory, {0xC10A0000, between, 0xE1090000}); // ll $t2, 0($t0); ...; sc $t1, 0($t0)
+        memory.write_u32(GuestAddress{kProgramBase + 64}, 0x11111111);
+        memory.write_u32(GuestAddress{kProgramBase + 68}, 0x22222222);
+        CpuState state{.program_counter = GuestAddress{kProgramBase}};
+        state.registers[8] = kProgramBase + 64;
+        state.registers[9] = 0xAAAAAAAA;
+        state.registers[11] = 0x77;
+        Cpu cpu(memory);
+        step_n(cpu, state, 3);
+        EXPECT_EQ(state.registers[10], 0x11111111U);
+        EXPECT_EQ(state.registers[9], 1U);
+        EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 64}), 0xAAAAAAAAU);
+        EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 68}), between == 0xAD0B0004U ? 0x77U : 0x22222222U);
+        EXPECT_TRUE(state.load_linked);
+    }
+}
+
+TEST(CpuTest, AllegrexStoreConditionalCanRepeatAndUseDifferentAddresses)
+{
+    Memory memory(GuestAddress{kProgramBase}, 128);
+    load_program(memory, {0xC10A0000, 0xE1090004, 0xE10B000C}); // ll; sc to word 1; sc to word 3
+    memory.write_u32(GuestAddress{kProgramBase + 64}, 0x11111111);
+    memory.write_u32(GuestAddress{kProgramBase + 68}, 0x22222222);
+    memory.write_u32(GuestAddress{kProgramBase + 76}, 0x44444444);
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
+    state.registers[8] = kProgramBase + 64;
+    state.registers[9] = 0xAAAAAAAA;
+    state.registers[11] = 0xBBBBBBBB;
+    Cpu cpu(memory);
+    step_n(cpu, state, 3);
+    EXPECT_EQ(state.registers[9], 1U);
+    EXPECT_EQ(state.registers[11], 1U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 64}), 0x11111111U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 68}), 0xAAAAAAAAU);
+    EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 76}), 0xBBBBBBBBU);
+    EXPECT_TRUE(state.load_linked);
+}
+
+TEST(CpuTest, SyscallClearsLinkAndLoadLinkedCanRearmIt)
+{
+    Memory memory(GuestAddress{kProgramBase}, 128);
+    load_program(memory, {0xC10A0000, 0xC, 0xE1090000, 0xE1090004, 0xC10A0000, 0xE1090000});
+    memory.write_u32(GuestAddress{kProgramBase + 64}, 0x11111111);
+    memory.write_u32(GuestAddress{kProgramBase + 68}, 0x22222222);
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
+    state.registers[8] = kProgramBase + 64;
+    state.registers[9] = 0xAAAAAAAA;
+    Cpu cpu(memory);
+    cpu.step(state);
+    ASSERT_TRUE(state.load_linked);
+    ASSERT_EQ(cpu.step(state), (Syscall{0, GuestAddress{kProgramBase + 4}}));
+    EXPECT_FALSE(state.load_linked);
+    step_n(cpu, state, 2);
+    EXPECT_EQ(state.registers[9], 0U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 64}), 0x11111111U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 68}), 0x22222222U);
+    cpu.step(state);
+    state.registers[9] = 0xBBBBBBBB;
+    cpu.step(state);
+    EXPECT_EQ(state.registers[9], 1U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 64}), 0xBBBBBBBBU);
+}
+
+TEST(CpuTest, LinkedLoadsAndStoresHandleZeroAndAliasedRegistersWithSignedOffsets)
+{
+    Memory memory(GuestAddress{kProgramBase}, 128);
+    // LL to zero still links; SC from zero stores zero and discards its result.
+    load_program(memory, {0xC100FFFC, 0xE100FFFC, 0xC108FFFC});
+    memory.write_u32(GuestAddress{kProgramBase + 64}, 0x11111111);
+    CpuState state{.program_counter = GuestAddress{kProgramBase}};
+    state.registers[8] = kProgramBase + 68;
+    Cpu cpu(memory);
+    cpu.step(state);
+    EXPECT_TRUE(state.load_linked);
+    EXPECT_EQ(state.registers[0], 0U);
+    cpu.step(state);
+    EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 64}), 0U);
+    EXPECT_EQ(state.registers[0], 0U);
+    memory.write_u32(GuestAddress{kProgramBase + 64}, 0x22222222);
+    cpu.step(state); // LL overwrites its address base only after reading memory.
+    EXPECT_EQ(state.registers[8], 0x22222222U);
+
+    load_program(memory, {0xE108FFFC}); // SC uses old rt/base for both address and value.
+    state.program_counter = GuestAddress{kProgramBase};
+    state.next_program_counter = GuestAddress{kProgramBase + 4};
+    state.registers[8] = kProgramBase + 68;
+    cpu.step(state);
+    EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 64}), kProgramBase + 68);
+    EXPECT_EQ(state.registers[8], 1U);
+}
+
+TEST(CpuTest, LinkedMemoryFaultsPreserveStateAndMemory)
+{
+    for (const auto instruction : {0xC1090001U, 0xC1090040U, 0xE1090001U, 0xE1090040U})
+    {
+        for (const bool linked : {false, true})
+        {
+            // An unlinked SC does not access memory, so test its alignment fault only.
+            if (!linked && instruction == 0xE1090040U)
+            {
+                continue;
+            }
+            SCOPED_TRACE(instruction);
+            SCOPED_TRACE(linked);
+            Memory memory(GuestAddress{kProgramBase}, 64);
+            load_program(memory, {instruction});
+            const auto original_memory = memory.read_bytes(GuestAddress{kProgramBase}, 64);
+            CpuState state{.program_counter = GuestAddress{kProgramBase},
+                           .next_program_counter = GuestAddress{kProgramBase + 32}};
+            state.registers[8] = kProgramBase;
+            state.registers[9] = 0xAAAAAAAA;
+            state.load_linked = linked;
+            const auto original_state = state;
+            Cpu cpu(memory);
+            EXPECT_ANY_THROW(cpu.step(state));
+            EXPECT_EQ(state, original_state);
+            EXPECT_EQ(memory.read_bytes(GuestAddress{kProgramBase}, 64), original_memory);
+        }
+    }
+}
+
+TEST(CpuTest, LinkStateBelongsToTheSuppliedCpuState)
+{
+    Memory memory(GuestAddress{kProgramBase}, 128);
+    load_program(memory, {0xC10A0000, 0xE1090000});
+    memory.write_u32(GuestAddress{kProgramBase + 64}, 0x11111111);
+    CpuState first{.program_counter = GuestAddress{kProgramBase}};
+    first.registers[8] = kProgramBase + 64;
+    first.registers[9] = 0xAAAAAAAA;
+    CpuState second{.program_counter = GuestAddress{kProgramBase + 4}};
+    second.registers[8] = kProgramBase + 64;
+    second.registers[9] = 0xBBBBBBBB;
+    Cpu cpu(memory);
+    cpu.step(first);
+    auto saved = first;
+    cpu.step(second);
+    EXPECT_EQ(second.registers[9], 0U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 64}), 0x11111111U);
+    cpu.step(saved);
+    EXPECT_EQ(saved.registers[9], 1U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{kProgramBase + 64}), 0xAAAAAAAAU);
+    EXPECT_TRUE(first.load_linked);
+}
+
 TEST(CpuTest, ReportsSyscallsAfterCommittingTheReturnDelaySlot)
 {
     Memory memory(GuestAddress{kProgramBase}, 32);
@@ -452,10 +622,13 @@ TEST(CpuTest, ReportsSyscallsAfterCommittingTheReturnDelaySlot)
     CpuState state{.program_counter = GuestAddress{kProgramBase}};
     Cpu cpu(memory);
     state.registers[31] = kProgramBase + 16;
+    state.load_linked = true;
     EXPECT_FALSE(cpu.step(state));
     EXPECT_EQ(state.program_counter, GuestAddress{kProgramBase + 4});
+    EXPECT_TRUE(state.load_linked);
     EXPECT_EQ(cpu.step(state), (Syscall{123U, GuestAddress{kProgramBase + 4}}));
     EXPECT_EQ(state.program_counter, GuestAddress{kProgramBase + 16});
+    EXPECT_FALSE(state.load_linked);
 }
 
 TEST(CpuTest, ReportsZeroAndMaximumSyscallCodesWithTheirInstructionAddresses)

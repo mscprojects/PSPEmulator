@@ -65,6 +65,14 @@ The interpreter implements `LWL`, `LWR`, `SWL`, and `SWR` using the little-endia
 
 CPU tests cover every byte offset, negative offsets, left/right pairs in both orders, base/destination register aliasing, `$zero`, and faults without modifying registers, memory, or pending control flow. The runtime integration test executes the bundled `lsu.prx` at two load addresses and compares the complete output with `lsu.expected` plus the final blank line emitted by `lsu.c` but omitted from that expectation file. The emulator preserves the guest output as written.
 
+## Linked word loads and conditional stores
+
+`LL` loads an aligned word and sets `CpuState::load_linked`. `SC` stores its register value only when that bit is set, then replaces the same register with one for success or zero for failure. The address is calculated before modifying the register, including when the base and value register are the same. A syscall clears the bit before returning its event to the runtime.
+
+The [bundled PSP hardware test](../third_party/pspautotests/tests/cpu/lsu/llsc.c) and [expected output](../third_party/pspautotests/tests/cpu/lsu/llsc.expected), pinned at [1885ee4](https://github.com/hrydgard/pspautotests/blob/1885ee4ed34a03477066b249667ff90813d6b7e0/tests/cpu/lsu/llsc.c), define the Allegrex-specific behavior: ordinary loads and stores leave the bit set, `SC` can target a different address, and successful `SC` does not clear the bit. CPU tests cover those cases, repeated failures, syscall invalidation and rearming, signed offsets, register aliasing, `$zero`, saved-state copies, and faults that preserve the uncommitted instruction state.
+
+The bundled `llsc.prx` now reaches `sceKernelGetSystemTimeLow` (`ThreadManForUser`, NID `0x369ED59D`), which remains unsupported. The complete test also needs thread delays and timer interrupts. Interrupt delivery and guest exception entry remain unimplemented; host-reported CPU faults retain the existing retry behavior rather than simulating exception entry. Future interrupt delivery must clear the link bit.
+
 ## Runtime boundary
 
 `Cpu::step(CpuState &)` returns an optional `Syscall` event containing its encoded code and instruction address after committing instruction control flow. In an import stub, `JR $ra` schedules the return and its delay-slot `SYSCALL` reports a service to the runtime. `SyscallDispatcher` resolves the code to a library name and NID, translates register arguments into named service operations, and supplies results in guest registers. Execution resumes at the committed return target. CPU instruction semantics do not depend on PSP service implementations. See [runtime and syscall handling](runtime.md) for component ownership, guest structures, and scheduling behavior.
