@@ -7,9 +7,9 @@
 namespace psp::detail
 {
 
-SyscallDispatcher::SyscallDispatcher(Memory &memory, Kernel &kernel, GuestAllocator &allocator, GuestIo &io,
+SyscallDispatcher::SyscallDispatcher(Memory &memory, Kernel &kernel, GuestIo &io,
                                      std::span<const PrxImportLibrary> imports)
-    : memory_(memory), kernel_(kernel), allocator_(allocator), io_(io)
+    : memory_(memory), kernel_(kernel), io_(io)
 {
     std::uint32_t code = 1;
     for (const auto &library : imports)
@@ -116,11 +116,11 @@ std::uint32_t SyscallDispatcher::dispatch(CpuState &state, const ImportBinding &
         {
         case 0xA291F107: // sceKernelMaxFreeMemSize
         case 0xF919F628: // sceKernelTotalFreeMemSize
-            return allocator_.free_size();
+            return kernel_.free_memory_size();
         case 0x237DBD4F: // sceKernelAllocPartitionMemory
             return kernel_.allocate_partition({arg(0), arg(2), arg(3)});
         case 0x9D9A5BA1: // sceKernelGetBlockHeadAddr
-            return allocator_.block_address(arg(0)).value_of();
+            return kernel_.block_address(arg(0)).value_of();
         default:
             break;
         }

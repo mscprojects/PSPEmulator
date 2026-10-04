@@ -1,7 +1,7 @@
 #include "runtime/guest_structures.hpp"
 
 #include <bit>
-#include <cstring>
+#include <span>
 
 namespace psp::detail
 {
@@ -27,9 +27,8 @@ void write_thread_info(Memory &memory, GuestAddress address, const GuestThreadIn
 
 GuestMutexWorkArea read_mutex_work_area(const Memory &memory, GuestAddress address)
 {
-    const auto payload = memory.read_bytes(address, sizeof(GuestMutexWorkArea));
     GuestMutexWorkArea work_area;
-    std::memcpy(&work_area, payload.data(), sizeof(work_area));
+    memory.read_into(address, std::as_writable_bytes(std::span{&work_area, 1}));
     return work_area;
 }
 

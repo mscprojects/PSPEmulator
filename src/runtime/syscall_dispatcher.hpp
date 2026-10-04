@@ -22,8 +22,7 @@ class SyscallDispatcher
     };
 
 public:
-    SyscallDispatcher(Memory &memory, Kernel &kernel, GuestAllocator &allocator, GuestIo &io,
-                      std::span<const PrxImportLibrary> imports);
+    SyscallDispatcher(Memory &memory, Kernel &kernel, GuestIo &io, std::span<const PrxImportLibrary> imports);
     // Current services complete synchronously or throw. If blocking waits are
     // introduced, their return register must be supplied on wake-up instead.
     void handle(const Syscall &syscall, CpuState &state, std::uint64_t instructions);
@@ -33,7 +32,6 @@ private:
 
     Memory &memory_;
     Kernel &kernel_;
-    GuestAllocator &allocator_;
     GuestIo &io_;
     std::map<std::uint32_t, ImportBinding> imports_;
 };

@@ -9,9 +9,8 @@ namespace psp::detail
 
 Runtime::Runtime(const ParsedPrx &prx, const ExecutionOptions &options)
     : loaded_(prepare_prx(prx, options.load_address, options.memory_size)), cpu_(loaded_.memory),
-      allocator_(options.load_address, options.memory_size, prx.segments),
-      kernel_(loaded_.memory, allocator_, loaded_.module.global_pointer), io_(loaded_.memory),
-      dispatcher_(loaded_.memory, kernel_, allocator_, io_, loaded_.imports),
+      kernel_(loaded_.memory, options.load_address, options.memory_size, prx.segments, loaded_.module.global_pointer),
+      io_(loaded_.memory), dispatcher_(loaded_.memory, kernel_, io_, loaded_.imports),
       instruction_budget_(options.max_instructions)
 {
     if (instruction_budget_ == 0)

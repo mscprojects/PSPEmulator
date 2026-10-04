@@ -10,8 +10,7 @@ namespace psp::detail
 TEST(KernelTest, ThreadSelectionPreservesSeparateCpuStatesAndReturnStatus)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    GuestAllocator allocator(GuestAddress{0}, 0x40000, {});
-    Kernel kernel(memory, allocator, GuestAddress{0x100});
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0x100});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto first = kernel.current_thread_id();
     const auto second = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "second", 0});
@@ -47,8 +46,7 @@ TEST(KernelTest, ThreadSelectionPreservesSeparateCpuStatesAndReturnStatus)
 TEST(KernelTest, ObjectIdentifiersAreSharedAcrossThreadsPartitionsAndSynchronization)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    GuestAllocator allocator(GuestAddress{0}, 0x40000, {});
-    Kernel kernel(memory, allocator, GuestAddress{0});
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto thread = kernel.current_thread_id();
     const auto block = kernel.allocate_partition({2, 0, 256});
@@ -61,15 +59,14 @@ TEST(KernelTest, ObjectIdentifiersAreSharedAcrossThreadsPartitionsAndSynchroniza
     EXPECT_NE(thread, semaphore);
     EXPECT_NE(thread, mutex);
     EXPECT_NE(block, mutex);
-    EXPECT_EQ(allocator.block_address(block), GuestAddress{256});
-    EXPECT_THROW(allocator.block_address(semaphore), std::out_of_range);
+    EXPECT_EQ(kernel.block_address(block), GuestAddress{256});
+    EXPECT_THROW(kernel.block_address(semaphore), std::out_of_range);
 }
 
 TEST(KernelTest, WrongMutexOwnerCannotChangeGuestWorkArea)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    GuestAllocator allocator(GuestAddress{0}, 0x40000, {});
-    Kernel kernel(memory, allocator, GuestAddress{0});
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto other = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "other", 0});
     kernel.create_mutex({GuestAddress{0x900}, GuestAddress{0x800}, 0x200, 0, GuestAddress{0}});
@@ -88,17 +85,22 @@ TEST(KernelTest, WrongMutexOwnerCannotChangeGuestWorkArea)
     EXPECT_EQ(memory.read_bytes(GuestAddress{0x900}, 32), original);
 }
 
-TEST(GuestAllocatorTest, HeapAndStacksShareAnArenaAndFailedAllocationsPreserveCapacity)
+TEST(KernelTest, HeapAndStacksShareAnArenaAndFailedAllocationsPreserveCapacity)
 {
-    GuestAllocator allocator(GuestAddress{0x1000}, 1024, {});
-    EXPECT_EQ(allocator.allocate(1, false), GuestAddress{0x1000});
-    EXPECT_EQ(allocator.allocate(1, true), GuestAddress{0x1300});
-    EXPECT_EQ(allocator.free_size(), 512U);
-    EXPECT_THROW(allocator.allocate(513, false), std::runtime_error);
-    EXPECT_EQ(allocator.free_size(), 512U);
-    EXPECT_EQ(allocator.allocate(512, false), GuestAddress{0x1100});
-    EXPECT_EQ(allocator.free_size(), 0U);
-    EXPECT_THROW(allocator.allocate(1, true), std::runtime_error);
+    Memory memory(GuestAddress{0x1000}, 1280);
+    Kernel kernel(memory, GuestAddress{0x1000}, 1280, {}, GuestAddress{0});
+    // The kernel's return sentinel reserves the first 256 bytes.
+    const auto low = kernel.allocate_partition({2, 0, 1});
+    const auto high = kernel.allocate_partition({2, 1, 1});
+    EXPECT_EQ(kernel.block_address(low), GuestAddress{0x1100});
+    EXPECT_EQ(kernel.block_address(high), GuestAddress{0x1400});
+    EXPECT_EQ(kernel.free_memory_size(), 512U);
+    EXPECT_THROW(kernel.allocate_partition({2, 0, 513}), std::runtime_error);
+    EXPECT_EQ(kernel.free_memory_size(), 512U);
+    const auto remaining = kernel.allocate_partition({2, 0, 512});
+    EXPECT_EQ(kernel.block_address(remaining), GuestAddress{0x1200});
+    EXPECT_EQ(kernel.free_memory_size(), 0U);
+    EXPECT_THROW(kernel.allocate_partition({2, 1, 1}), std::runtime_error);
 }
 
 } // namespace psp::detail

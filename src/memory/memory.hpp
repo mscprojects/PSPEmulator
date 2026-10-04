@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 
 namespace psp
@@ -22,6 +23,9 @@ public:
     // Return an owning copy after checking the entire range. An empty range is valid
     // without dereferencing its address; invalid nonempty ranges throw std::out_of_range.
     Payload read_bytes(GuestAddress address, std::size_t size) const;
+    // Copy into caller-owned storage after validating the entire guest range.
+    // Empty reads are no-ops; invalid ranges leave the destination unchanged.
+    void read_into(GuestAddress address, std::span<std::byte> destination) const;
     // Copy a NUL-terminated string, excluding its terminator from the result.
     // max_length bounds the bytes examined, including the terminator.
     // Throws std::invalid_argument for a zero limit, std::out_of_range if reading

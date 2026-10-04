@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstdint>
 #include <stdexcept>
 #include <type_traits>
@@ -70,6 +71,31 @@ TEST(MemoryTest, CopiesBinaryRangesWithIndependentOwnership)
     EXPECT_THROW(memory.read_bytes(GuestAddress{99}, 1), std::out_of_range);
     EXPECT_THROW(memory.read_bytes(GuestAddress{103}, 2), std::out_of_range);
     EXPECT_THROW(memory.read_bytes(GuestAddress{104}, 1), std::out_of_range);
+}
+
+TEST(MemoryTest, ReadsIntoCallerStorageAndRejectsInvalidRangesWithoutPartialCopies)
+{
+    Memory memory(GuestAddress{100}, 5);
+    memory.write_bytes(GuestAddress{100}, Payload{0xA5, 0, 0xFF, 'x', 0});
+    std::array<std::uint8_t, 4> destination{};
+    const auto bytes = std::as_writable_bytes(std::span{destination});
+    memory.read_into(GuestAddress{101}, bytes);
+    const std::array<std::uint8_t, 4> expected{0, 0xFF, 'x', 0};
+    EXPECT_EQ(destination, expected);
+    EXPECT_THROW(memory.read_into(GuestAddress{99}, bytes), std::out_of_range);
+    EXPECT_EQ(destination, expected);
+    EXPECT_THROW(memory.read_into(GuestAddress{102}, bytes), std::out_of_range);
+    EXPECT_EQ(destination, expected);
+    EXPECT_NO_THROW(memory.read_into(GuestAddress{0}, {}));
+    EXPECT_NO_THROW(memory.read_into(GuestAddress{105}, {}));
+
+    Memory last_bytes(GuestAddress{0xFFFFFFFE}, 2);
+    last_bytes.write_u16(GuestAddress{0xFFFFFFFE}, 0x1234);
+    last_bytes.read_into(GuestAddress{0xFFFFFFFE}, bytes.first(2));
+    EXPECT_EQ(destination, (std::array<std::uint8_t, 4>{0x34, 0x12, 'x', 0}));
+    const auto original = destination;
+    EXPECT_THROW(last_bytes.read_into(GuestAddress{0xFFFFFFFF}, bytes.first(2)), std::out_of_range);
+    EXPECT_EQ(destination, original);
 }
 
 TEST(MemoryTest, ReadsStringsWithoutRequiringTheEntireLimitToBeMapped)

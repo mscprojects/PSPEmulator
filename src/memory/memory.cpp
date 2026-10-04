@@ -1,6 +1,7 @@
 #include "memory/memory.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 
@@ -41,6 +42,16 @@ Payload Memory::read_bytes(GuestAddress address, std::size_t size) const
     const auto offset = checked_offset(address, size);
     const auto bytes = PayloadSpan{bytes_}.subspan(offset, size);
     return Payload(bytes.begin(), bytes.end());
+}
+
+void Memory::read_into(GuestAddress address, std::span<std::byte> destination) const
+{
+    if (destination.empty())
+    {
+        return;
+    }
+    const auto offset = checked_offset(address, destination.size());
+    std::memcpy(destination.data(), bytes_.data() + offset, destination.size());
 }
 
 std::string Memory::read_c_string(GuestAddress address, std::size_t max_length) const

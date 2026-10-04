@@ -1,16 +1,24 @@
 #pragma once
 
 #include "cpu/cpu_state.hpp"
-#include "runtime/guest_allocator.hpp"
+#include "loader/prx_reader.hpp"
 #include "runtime/guest_structures.hpp"
 
 #include <deque>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace psp::detail
 {
+
+struct PartitionAllocation
+{
+    std::uint32_t partition;
+    std::uint32_t type;
+    std::uint32_t size;
+};
 
 struct ThreadCreation
 {
@@ -39,10 +47,16 @@ struct SemaphoreCreation
     GuestAddress options;
 };
 
-// Owns threads, cooperative scheduling, synchronization, and kernel object IDs.
+// Owns threads, scheduling, synchronization, allocations, and kernel object IDs.
 // Blocking waits, callbacks, timeouts, and preemption remain unsupported.
 class Kernel
 {
+    enum class AllocationDirection : std::uint8_t
+    {
+        Low,
+        High,
+    };
+
     enum class Lifecycle : std::uint8_t
     {
         Created,
@@ -65,7 +79,8 @@ class Kernel
     };
 
 public:
-    Kernel(Memory &memory, GuestAllocator &allocator, GuestAddress global_pointer);
+    Kernel(Memory &memory, GuestAddress load_address, std::size_t memory_size, std::span<const PrxSegment> segments,
+           GuestAddress global_pointer);
     Kernel(const Kernel &) = delete;
     Kernel &operator=(const Kernel &) = delete;
     void initialize(GuestAddress entry, std::span<const std::string> arguments);
@@ -92,14 +107,21 @@ public:
     void signal_semaphore(std::uint32_t id, std::uint32_t count);
 
     std::uint32_t allocate_partition(PartitionAllocation allocation);
+    std::uint32_t free_memory_size() const;
+    GuestAddress block_address(std::uint32_t id) const;
 
 private:
+    // Thread stacks and partition blocks share a monotonic arena. Neither end
+    // may cross the other; reclamation remains unsupported.
+    GuestAddress allocate_memory(std::uint32_t size, AllocationDirection direction);
     void place_arguments(Thread &thread, PayloadSpan arguments);
     GuestMutexWorkArea mutex_work_area(GuestAddress address) const;
     void validate_mutex_count(const GuestMutexWorkArea &work_area, std::uint32_t count) const;
 
     Memory &memory_;
-    GuestAllocator &allocator_;
+    std::uint64_t heap_;
+    std::uint64_t stack_top_;
+    std::map<std::uint32_t, GuestAddress> blocks_;
     std::uint32_t next_id_{1};
     GuestAddress global_pointer_;
     GuestAddress return_address_;

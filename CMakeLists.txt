@@ -35,7 +35,6 @@ add_library(psp_core
     src/loader/prx_reader.cpp
     src/loader/prx.cpp
     src/runtime/execution.cpp
-    src/runtime/guest_allocator.cpp
     src/runtime/guest_io.cpp
     src/runtime/guest_structures.cpp
     src/runtime/kernel.cpp

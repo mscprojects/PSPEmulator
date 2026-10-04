@@ -6,8 +6,8 @@
 namespace psp::detail
 {
 
-// Owns one execution and coordinates its components. Kernel state, allocation,
-// import dispatch, and guest I/O have separate owners and no Runtime reference.
+// Owns one execution and coordinates the CPU, kernel, syscall dispatch, and
+// guest I/O. Those components do not receive a Runtime reference.
 class Runtime
 {
 public:
@@ -17,7 +17,6 @@ public:
 private:
     LoadedPrx loaded_;
     Cpu cpu_;
-    GuestAllocator allocator_;
     Kernel kernel_;
     GuestIo io_;
     SyscallDispatcher dispatcher_;

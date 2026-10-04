@@ -8,10 +8,22 @@
 namespace psp::detail
 {
 
-Kernel::Kernel(Memory &memory, GuestAllocator &allocator, GuestAddress global_pointer)
-    : memory_(memory), allocator_(allocator), global_pointer_(global_pointer),
-      return_address_(allocator.allocate(256, false))
+Kernel::Kernel(Memory &memory, GuestAddress load_address, std::size_t memory_size, std::span<const PrxSegment> segments,
+               GuestAddress global_pointer)
+    : memory_(memory), heap_(load_address.value_of()),
+      stack_top_((static_cast<std::uint64_t>(load_address.value_of()) + memory_size) & ~std::uint64_t{255}),
+      global_pointer_(global_pointer), return_address_(GuestAddress{0})
 {
+    for (const auto &segment : segments)
+    {
+        if (segment.type == 1)
+        {
+            heap_ = std::max(heap_, static_cast<std::uint64_t>(load_address.value_of()) + segment.virtual_address +
+                                        segment.memory_size);
+        }
+    }
+    heap_ = (heap_ + 255) & ~std::uint64_t{255};
+    return_address_ = allocate_memory(256, AllocationDirection::Low);
 }
 
 void Kernel::initialize(GuestAddress entry, std::span<const std::string> arguments)
@@ -43,7 +55,7 @@ std::uint32_t Kernel::create_thread(ThreadCreation creation)
     {
         throw std::runtime_error("Thread stack must contain at least 512 bytes");
     }
-    const auto stack = allocator_.allocate(creation.stack_size, true);
+    const auto stack = allocate_memory(creation.stack_size, AllocationDirection::High);
     CpuState state{.program_counter = creation.entry};
     state.registers[28] = global_pointer_.value_of();
     state.registers[31] = return_address_.value_of();
@@ -261,7 +273,42 @@ void Kernel::signal_semaphore(std::uint32_t id, std::uint32_t count)
 
 std::uint32_t Kernel::allocate_partition(PartitionAllocation allocation)
 {
-    return allocator_.allocate_partition(next_id_++, allocation);
+    if (allocation.partition != 2 || allocation.type > 1)
+    {
+        throw std::runtime_error("Unsupported partition allocation");
+    }
+    const auto direction = allocation.type == 1 ? AllocationDirection::High : AllocationDirection::Low;
+    const auto address = allocate_memory(allocation.size, direction);
+    const auto id = next_id_++;
+    blocks_.emplace(id, address);
+    return id;
+}
+
+std::uint32_t Kernel::free_memory_size() const
+{
+    return static_cast<std::uint32_t>(stack_top_ - heap_);
+}
+
+GuestAddress Kernel::block_address(std::uint32_t id) const
+{
+    return blocks_.at(id);
+}
+
+GuestAddress Kernel::allocate_memory(std::uint32_t size, AllocationDirection direction)
+{
+    const auto aligned_size = (static_cast<std::uint64_t>(size) + 255) & ~std::uint64_t{255};
+    if (size == 0 || heap_ > stack_top_ || aligned_size > stack_top_ - heap_)
+    {
+        throw std::runtime_error("Guest memory exhausted");
+    }
+    if (direction == AllocationDirection::High)
+    {
+        stack_top_ -= aligned_size;
+        return GuestAddress{static_cast<std::uint32_t>(stack_top_)};
+    }
+    const auto address = GuestAddress{static_cast<std::uint32_t>(heap_)};
+    heap_ += aligned_size;
+    return address;
 }
 
 void Kernel::place_arguments(Thread &thread, PayloadSpan arguments)
