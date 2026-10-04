@@ -32,6 +32,7 @@ ExecutionResult Runtime::run()
             {
                 throw std::runtime_error("Instruction budget exhausted");
             }
+            kernel_.deliver_pending_interrupt();
             const auto syscall = cpu_.step(state);
             ++instructions_;
             kernel_.advance_time(1);

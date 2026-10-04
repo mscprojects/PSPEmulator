@@ -118,6 +118,16 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
     {
         switch (binding.nid)
         {
+        case 0x092968F4: // sceKernelCpuSuspendIntr
+            return kernel_.suspend_interrupts();
+        case 0x5F10D406: // sceKernelCpuResumeIntr
+        case 0x3B84732D: // sceKernelCpuResumeIntrWithSync
+            kernel_.resume_interrupts(arg(0));
+            return 0;    // Void PSP service; v0 is not part of its contract.
+        case 0x47A0B729: // sceKernelIsCpuIntrSuspended (see intr/suspended.expected).
+            return static_cast<std::uint32_t>(arg(0) == 0);
+        case 0xB55249D2: // sceKernelIsCpuIntrEnable
+            return static_cast<std::uint32_t>(kernel_.interrupts_enabled());
         case 0xBEA46419: // sceKernelLockLwMutex
             kernel_.lock_mutex(GuestAddress{arg(0)}, arg(1), GuestAddress{arg(2)});
             return 0;

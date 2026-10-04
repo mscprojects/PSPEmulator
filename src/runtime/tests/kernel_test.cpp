@@ -216,6 +216,158 @@ TEST(KernelTest, GuestClockAndDelayDeadlinesRemainWideAndRejectOverflow)
     EXPECT_EQ(kernel.system_time(), std::numeric_limits<std::uint64_t>::max());
 }
 
+TEST(KernelTest, VblankInterruptsFollowLcdCadenceWithoutRoundingDrift)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    kernel.initialize(GuestAddress{0x400}, {});
+    // 60000/1001 Hz gives edges at 16683 1/3, 33366 2/3, and 50050 us.
+    kernel.advance_time(16'683);
+    EXPECT_FALSE(kernel.deliver_pending_interrupt());
+    kernel.advance_time(1);
+    EXPECT_TRUE(kernel.deliver_pending_interrupt());
+    EXPECT_FALSE(kernel.deliver_pending_interrupt());
+    kernel.advance_time(16'682);
+    EXPECT_FALSE(kernel.deliver_pending_interrupt());
+    kernel.advance_time(1);
+    EXPECT_TRUE(kernel.deliver_pending_interrupt());
+    kernel.advance_time(16'682);
+    EXPECT_FALSE(kernel.deliver_pending_interrupt());
+    kernel.advance_time(1);
+    EXPECT_TRUE(kernel.deliver_pending_interrupt());
+    kernel.advance_time(1'001'000 - kernel.system_time() - 1);
+    EXPECT_TRUE(kernel.deliver_pending_interrupt()); // Crossed multiple frames.
+    kernel.advance_time(1);
+    EXPECT_TRUE(kernel.deliver_pending_interrupt()); // Exactly the 60th edge.
+    kernel.advance_time(0);
+    EXPECT_FALSE(kernel.deliver_pending_interrupt());
+}
+
+TEST(KernelTest, InterruptMakesStoreConditionalFailAndLoadLinkedCanRearmIt)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    kernel.initialize(GuestAddress{0x400}, {});
+    Cpu cpu(memory);
+    memory.write_u32(GuestAddress{0x400}, 0xC0850000); // ll $a1, 0($a0)
+    memory.write_u32(GuestAddress{0x404}, 0xE0850000); // sc $a1, 0($a0)
+    memory.write_u32(GuestAddress{0x408}, 0xC0850000);
+    memory.write_u32(GuestAddress{0x40C}, 0xE0850000);
+    memory.write_u32(GuestAddress{0x1000}, 0x11111111);
+    auto &state = kernel.current_thread_state();
+    state.registers[4] = 0x1000;
+    cpu.step(state);
+    state.registers[5] = 0xAAAAAAAA;
+    const auto saved = state;
+    kernel.advance_time(16'684);
+    ASSERT_TRUE(kernel.deliver_pending_interrupt());
+    auto resumed = saved;
+    resumed.load_linked = false;
+    EXPECT_EQ(state, resumed);
+    cpu.step(state);
+    EXPECT_EQ(state.registers[5], 0U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{0x1000}), 0x11111111U);
+    cpu.step(state); // LL after interrupt return.
+    state.registers[5] = 0xBBBBBBBB;
+    cpu.step(state);
+    EXPECT_EQ(state.registers[5], 1U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{0x1000}), 0xBBBBBBBBU);
+}
+
+TEST(KernelTest, InterruptPreservesBranchAndReturnDelaySlotsAndAllRegisters)
+{
+    for (const auto branch : {0x10000003U, 0x50000003U, 0x00200008U}) // BEQ, BEQL, JR
+    {
+        SCOPED_TRACE(branch);
+        Memory memory(GuestAddress{0}, 0x40000);
+        Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+        kernel.initialize(GuestAddress{0x400}, {});
+        Cpu cpu(memory);
+        memory.write_u32(GuestAddress{0x400}, branch);
+        memory.write_u32(GuestAddress{0x404}, 0x26100001); // addiu $s0, $s0, 1 (delay slot)
+        memory.write_u32(GuestAddress{0x410}, 0xE0850000); // sc $a1, 0($a0) (target)
+        memory.write_u32(GuestAddress{0x1000}, 0x11111111);
+        auto &state = kernel.current_thread_state();
+        for (std::uint32_t index = 1; index < state.registers.size(); ++index)
+        {
+            state.registers[index] = index * 0x10101;
+        }
+        state.registers[1] = 0x410; // JR target.
+        state.registers[4] = 0x1000;
+        state.registers[5] = 0xAAAAAAAA;
+        state.high_register = 0x12345678;
+        state.low_register = 0x87654321;
+        state.load_linked = true;
+        cpu.step(state);
+        ASSERT_EQ(state.program_counter, GuestAddress{0x404});
+        ASSERT_EQ(state.next_program_counter, GuestAddress{0x410});
+        auto resumed = state;
+        resumed.load_linked = false;
+        kernel.advance_time(16'684);
+        ASSERT_TRUE(kernel.deliver_pending_interrupt());
+        EXPECT_EQ(state, resumed);
+        cpu.step(state);
+        EXPECT_EQ(state.registers[16], resumed.registers[16] + 1);
+        EXPECT_EQ(state.program_counter, GuestAddress{0x410});
+        cpu.step(state);
+        EXPECT_EQ(state.registers[5], 0U);
+        EXPECT_EQ(memory.read_u32(GuestAddress{0x1000}), 0x11111111U);
+    }
+}
+
+TEST(KernelTest, MaskedInterruptsStayPendingUntilTheOuterSuspendIsResumed)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    kernel.initialize(GuestAddress{0x400}, {});
+    auto &state = kernel.current_thread_state();
+    state.load_linked = true;
+    const auto outer = kernel.suspend_interrupts();
+    const auto inner = kernel.suspend_interrupts();
+    EXPECT_EQ(outer, 1U);
+    EXPECT_EQ(inner, 0U);
+    kernel.advance_time(1'001'000); // Sixty masked edges coalesce into one pending event.
+    EXPECT_FALSE(kernel.deliver_pending_interrupt());
+    EXPECT_TRUE(state.load_linked);
+    kernel.resume_interrupts(inner);
+    EXPECT_FALSE(kernel.interrupts_enabled());
+    EXPECT_FALSE(kernel.deliver_pending_interrupt());
+    kernel.resume_interrupts(outer);
+    EXPECT_TRUE(kernel.interrupts_enabled());
+    EXPECT_TRUE(state.load_linked); // Resume alone does not interrupt inside dispatch.
+    EXPECT_TRUE(kernel.deliver_pending_interrupt());
+    EXPECT_FALSE(state.load_linked);
+    state.load_linked = true;
+    EXPECT_FALSE(kernel.deliver_pending_interrupt());
+    EXPECT_TRUE(state.load_linked);
+    kernel.resume_interrupts(2); // Only the CPU interrupt-enable bit is restored.
+    EXPECT_FALSE(kernel.interrupts_enabled());
+}
+
+TEST(KernelTest, IdleTimeSchedulesInterruptsWithoutChangingWaitingThreadState)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    kernel.initialize(GuestAddress{0x400}, {});
+    auto &state = kernel.current_thread_state();
+    state.load_linked = true;
+    kernel.delay_thread(50'000);
+    kernel.advance_time(16'684);
+    EXPECT_FALSE(kernel.deliver_pending_interrupt()); // No running thread yet.
+    EXPECT_TRUE(state.load_linked);
+    ASSERT_TRUE(kernel.select_next_thread()); // Clock jumps to the wakeup deadline.
+    EXPECT_EQ(kernel.system_time(), 50'000U);
+    EXPECT_TRUE(kernel.deliver_pending_interrupt());
+    EXPECT_FALSE(state.load_linked);
+    EXPECT_FALSE(kernel.deliver_pending_interrupt());
+    // The idle jump itself must also generate edges.
+    state.load_linked = true;
+    kernel.delay_thread(50'000);
+    ASSERT_TRUE(kernel.select_next_thread());
+    EXPECT_TRUE(kernel.deliver_pending_interrupt());
+    EXPECT_FALSE(state.load_linked);
+}
+
 TEST(KernelTest, ObjectIdentifiersAreSharedAcrossThreadsPartitionsAndSynchronization)
 {
     Memory memory(GuestAddress{0}, 0x40000);

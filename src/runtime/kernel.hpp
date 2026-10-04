@@ -102,6 +102,13 @@ public:
     // deterministic rate rather than a cycle-accurate CPU clock.
     void advance_time(std::uint64_t microseconds);
     std::uint64_t system_time() const;
+    // Handle a pending periodic vblank interrupt at an instruction boundary.
+    // The HLE handler preserves CPU state except for the Allegrex link bit.
+    // Masked events coalesce and remain pending until interrupts are enabled.
+    bool deliver_pending_interrupt();
+    std::uint32_t suspend_interrupts();
+    void resume_interrupts(std::uint32_t flags);
+    bool interrupts_enabled() const;
     void exit_thread();
     void exit_game();
     int exit_code() const;
@@ -141,6 +148,8 @@ private:
     std::uint32_t current_thread_{};
     std::uint64_t system_time_{};
     std::multimap<std::uint64_t, std::uint32_t> delayed_;
+    bool interrupts_enabled_{true};
+    bool interrupt_pending_{};
     std::optional<int> exit_code_;
     std::map<std::uint32_t, GuestAddress> mutexes_;
     std::map<std::uint32_t, Semaphore> semaphores_;

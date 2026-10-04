@@ -99,7 +99,7 @@ bool Kernel::select_next_thread()
     {
         if (ready_.empty() && !delayed_.empty())
         {
-            system_time_ = delayed_.begin()->first;
+            advance_time(delayed_.begin()->first - system_time_);
             wake_delayed_threads();
         }
         if (ready_.empty())
@@ -149,12 +149,56 @@ void Kernel::advance_time(std::uint64_t microseconds)
     {
         throw std::overflow_error("Guest clock overflow");
     }
-    system_time_ += microseconds;
+    // LCD vblank is 60000/1001 Hz (PSPSDK pspdisplay.h). Split the
+    // calculation to keep it within uint64_t even at the clock's limit.
+    const auto vblanks = [](std::uint64_t time)
+    { return (time / 1'001'000) * 60 + (time % 1'001'000) * 60 / 1'001'000; };
+    const auto next_time = system_time_ + microseconds;
+    if (vblanks(next_time) != vblanks(system_time_))
+    {
+        interrupt_pending_ = true;
+    }
+    system_time_ = next_time;
 }
 
 std::uint64_t Kernel::system_time() const
 {
     return system_time_;
+}
+
+bool Kernel::deliver_pending_interrupt()
+{
+    if (!interrupts_enabled_ || !interrupt_pending_)
+    {
+        return false;
+    }
+    auto &thread = threads_.at(current_thread_);
+    if (thread.lifecycle != Lifecycle::Started)
+    {
+        return false;
+    }
+    // Kernel interrupt entry/return is handled on the host. No guest handler
+    // executes yet, so registers and both PCs already hold the resumed state.
+    thread.state.load_linked = false;
+    interrupt_pending_ = false;
+    return true;
+}
+
+std::uint32_t Kernel::suspend_interrupts()
+{
+    const auto previous = static_cast<std::uint32_t>(interrupts_enabled_);
+    interrupts_enabled_ = false;
+    return previous;
+}
+
+void Kernel::resume_interrupts(std::uint32_t flags)
+{
+    interrupts_enabled_ = (flags & 1U) != 0;
+}
+
+bool Kernel::interrupts_enabled() const
+{
+    return interrupts_enabled_;
 }
 
 void Kernel::exit_thread()

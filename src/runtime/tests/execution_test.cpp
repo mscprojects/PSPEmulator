@@ -129,6 +129,61 @@ TEST(ExecutionTest, BundledLsuMatchesHardwareOutputAtDifferentAddresses)
     }
 }
 
+TEST(ExecutionTest, BundledLlscMatchesEntireHardwareOutputAtDifferentAddresses)
+{
+    const std::string directory = std::string(PSPAUTOTESTS_ROOT) + "/tests/cpu/lsu/";
+    std::ifstream input(directory + "llsc.prx", std::ios::binary);
+    std::ifstream expected_file(directory + "llsc.expected", std::ios::binary);
+    ASSERT_TRUE(input.is_open());
+    ASSERT_TRUE(expected_file.is_open());
+    const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    const std::string expected{std::istreambuf_iterator<char>(expected_file), std::istreambuf_iterator<char>()};
+    const auto parsed = read_prx(payload);
+    for (const std::uint32_t base : {0x08800000U, 0x08900000U})
+    {
+        SCOPED_TRACE(base);
+        ExecutionOptions options;
+        options.load_address = GuestAddress{base};
+        const auto result = execute_prx(parsed, options);
+        EXPECT_EQ(result.exit_code, 0);
+        EXPECT_EQ(result.output, expected);
+        EXPECT_GT(result.instructions_executed, 0U);
+        EXPECT_LE(result.instructions_executed, options.max_instructions);
+    }
+}
+
+TEST(ExecutionTest, InterruptControlServicesRestoreNestedFlags)
+{
+    ServicePrxFixture program("Kernel_Library", {0x092968F4, 0x5F10D406, 0xB55249D2});
+    program.call(0);
+    program.instruction(0x00408021); // move $s0, $v0: outer flags
+    program.call(0);
+    program.instruction(0x00402021); // move $a0, $v0: inner flags
+    program.call(1);                 // Restoring inner flags leaves interrupts masked.
+    program.call(2);
+    program.instruction(0x00408821); // move $s1, $v0: must be disabled
+    program.instruction(0x02002021); // move $a0, $s0: outer flags
+    program.call(1);
+    program.call(2);
+    program.instruction(0x00511023); // subu $v0, $v0, $s1: 1 - 0
+    EXPECT_EQ(execute_prx(program.finish()).exit_code, 1);
+    // The WithSync variant shares the same flag restoration contract.
+    program.fixture.word(0x204, 0x3B84732D);
+    EXPECT_EQ(execute_prx(read_prx(program.fixture.bytes)).exit_code, 1);
+}
+
+TEST(ExecutionTest, InterruptSuspendedQueryMatchesHardwareFlags)
+{
+    for (const auto flags : {0U, 1U, 2U, 0xDEADBEEFU})
+    {
+        SCOPED_TRACE(flags);
+        ServicePrxFixture program("Kernel_Library", {0x47A0B729});
+        program.argument(0, flags);
+        program.call(0);
+        EXPECT_EQ(execute_prx(program.finish()).exit_code, flags == 0 ? 1 : 0);
+    }
+}
+
 TEST(ExecutionTest, RejectsUnboundSyscallCodes)
 {
     for (const std::uint32_t code : {0U, 2U, 0xFFFFFU})
