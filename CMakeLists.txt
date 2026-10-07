@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.20)
 
 project(PSPEmulator LANGUAGES CXX)
 
+if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "PSPEmulator requires Clang")
+endif()
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -14,16 +18,9 @@ add_subdirectory(third_party/strong_type)
 
 add_library(project_options INTERFACE)
 
-if(MSVC)
-    target_compile_options(project_options INTERFACE /W4)
-else()
-    target_compile_options(project_options INTERFACE -Wall -Wextra -Wpedantic)
-endif()
+target_compile_options(project_options INTERFACE -Wall -Wextra -Wpedantic)
 
 if(PSPEMU_ENABLE_SANITIZERS)
-    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-        message(FATAL_ERROR "Sanitizers require Clang or GCC")
-    endif()
     target_compile_options(project_options INTERFACE -fsanitize=address,undefined -fno-omit-frame-pointer)
     target_link_options(project_options INTERFACE -fsanitize=address,undefined)
 endif()
@@ -43,15 +40,7 @@ add_library(psp_core
     src/runtime/syscall_dispatcher.cpp
 )
 # Dynamic guest rounding and exception flags must survive optimization.
-if(MSVC)
-    set_source_files_properties(src/cpu/floating_point.cpp PROPERTIES COMPILE_OPTIONS "/fp:strict")
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    set_source_files_properties(src/cpu/floating_point.cpp PROPERTIES COMPILE_OPTIONS "-ffp-model=strict")
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set_source_files_properties(src/cpu/floating_point.cpp PROPERTIES COMPILE_OPTIONS "-frounding-math;-fno-fast-math;-ffp-contract=off")
-else()
-    message(FATAL_ERROR "Scalar FPU requires a compiler with strict floating-point support")
-endif()
+set_source_files_properties(src/cpu/floating_point.cpp PROPERTIES COMPILE_OPTIONS "-ffp-model=strict")
 
 target_include_directories(psp_core PUBLIC src)
 target_link_libraries(psp_core PUBLIC project_options strong_type::strong_type PRIVATE fmt::fmt)

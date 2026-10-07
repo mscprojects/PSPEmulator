@@ -38,9 +38,4 @@ sanitizers:
     cmake --build build-san --parallel "$(nproc)"
     ctest --test-dir build-san --parallel "$(nproc)" --output-on-failure --no-tests=error
 
-ci:
-    just format-check
-    just test
-    just release-test
-    just tidy
-    just sanitizers
+ci: format-check test release-test tidy sanitizers

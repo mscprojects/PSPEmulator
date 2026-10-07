@@ -4,7 +4,7 @@ An early PSP emulator project with a headless interpreter. It can load and execu
 
 ## Build
 
-Requires a C++23 compiler, CMake 3.20 or newer, fmt, and GoogleTest. Scalar FPU execution requires IEEE binary32 host evaluation and floating-point environment support; CMake enables strict floating-point compilation with GCC, Clang, or MSVC. The `just` recipes use clang++ and nproc; `ci` also requires clang-format and clang-tidy. `just` runs the common commands:
+Requires Clang with C++23 support, CMake 3.20 or newer, fmt, and GoogleTest. Scalar FPU execution requires IEEE binary32 host evaluation and floating-point environment support; CMake enables Clang’s strict floating-point mode. The `just` recipes use clang++ and nproc; `ci` also requires clang-format and clang-tidy. `just` runs the common commands:
 
 ```sh
 just build
