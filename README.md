@@ -9,6 +9,7 @@ Requires a C++23 compiler, CMake 3.20 or newer, fmt, and GoogleTest. Scalar FPU 
 ```sh
 just build
 just test
+just prx-test
 just ci
 ```
 
@@ -19,7 +20,9 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --parallel
 ```
 
-`just format` formats C++ files under `src/` with `clang-format`. `just ci` checks formatting, tests Debug and Release builds with GCC and Clang, runs clang-tidy on project source and headers, then builds and tests with address and undefined behavior sanitizers.
+`just prx-test` builds the GCC Release executable and runs only the bundled PRX hardware-output comparisons for fast iteration.
+
+`just format` formats C++ files under `src/` with `clang-format`. `just ci` checks formatting, tests Debug and Release builds with GCC and Clang, runs clang-tidy on project source and headers, then builds and tests a `RelWithDebInfo` build with address and undefined behavior sanitizers. The sanitizer build retains debug symbols and frame pointers while enabling optimization for faster PRX execution. All test runs use four CTest workers by default; set `CTEST_PARALLEL_LEVEL` to change the count, for example `CTEST_PARALLEL_LEVEL=8 just ci`. Builds already use CMake’s parallel build mode.
 
 `psp::Memory` owns zeroed regions and explicit aliases sharing their backing bytes. PRX execution maps configured RAM with its PSP address views and 2 MiB of VRAM at `0x04000000`, also accessible at `0x44000000`. Reads and writes remain little-endian; the CPU applies instruction-specific alignment checks. Nonempty accesses must fit within one mapping and invalid accesses throw `std::out_of_range`. See [guest memory](docs/memory.md) for the layout, ownership, and current limits.
 
