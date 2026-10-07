@@ -18,7 +18,7 @@ add_subdirectory(third_party/strong_type)
 
 add_library(project_options INTERFACE)
 
-target_compile_options(project_options INTERFACE -Wall -Wextra -Wpedantic)
+target_compile_options(project_options INTERFACE -Wall -Wextra -Wpedantic $<$<CONFIG:Debug>:-O1>)
 
 if(PSPEMU_ENABLE_SANITIZERS)
     target_compile_options(project_options INTERFACE -fsanitize=address,undefined -fno-omit-frame-pointer)
