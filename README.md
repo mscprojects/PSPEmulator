@@ -22,7 +22,9 @@ cmake --build build --parallel "$(nproc)"
 
 `just prx-test` builds the Clang Release executable and runs only the bundled PRX hardware-output comparisons for fast iteration.
 
-`just format` formats C++ files under `src/` with `clang-format`. `just ci` checks formatting, tests Debug and Release builds with Clang, runs clang-tidy on project source and headers, then builds and tests a `RelWithDebInfo` build with address and undefined behavior sanitizers. Debug builds use `-O1` for faster PRX execution while retaining debug symbols and assertions. The sanitizer build retains debug symbols and frame pointers while enabling optimization. Builds and test runs use the CPU count reported by `nproc` for parallel workers.
+`just format` formats C++ files under `src/` with `clang-format`. `just tidy` runs clang-tidy through CMake’s native `CMAKE_CXX_CLANG_TIDY` integration during a clean parallel build in `build-tidy`, using the repository’s `.clang-tidy` configuration.
+
+`just ci` checks formatting, tests Debug and Release builds with Clang, runs `tidy`, then builds and tests a `RelWithDebInfo` build with address and undefined behavior sanitizers. Debug builds use `-O1` for faster PRX execution while retaining debug symbols and assertions. The sanitizer build retains debug symbols and frame pointers while enabling optimization. Builds and test runs use the CPU count reported by `nproc` for parallel workers.
 
 `psp::Memory` owns zeroed regions and explicit aliases sharing their backing bytes. PRX execution maps configured RAM with its PSP address views and 2 MiB of VRAM at `0x04000000`, also accessible at `0x44000000`. Reads and writes remain little-endian; the CPU applies instruction-specific alignment checks. Nonempty accesses must fit within one mapping and invalid accesses throw `std::out_of_range`. See [guest memory](docs/memory.md) for the layout, ownership, and current limits.
 
