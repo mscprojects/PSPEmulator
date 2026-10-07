@@ -21,11 +21,12 @@ struct Syscall
 // Shared instruction interpreter; architectural state is supplied for each step.
 class Cpu
 {
-    // Stage instruction addresses so a failed step preserves pending control flow.
+    // Stage instruction addresses and the branch-visible FPU condition for fault retry.
     struct ControlFlow
     {
         GuestAddress next_instruction;
         GuestAddress following_instruction;
+        bool floating_point_branch_condition;
     };
 
     enum class DataAlignment : std::uint8_t
@@ -49,6 +50,7 @@ private:
     void execute_special(CpuState &state, std::uint32_t instruction, ControlFlow &flow);
     void execute_special3(CpuState &state, std::uint32_t instruction);
     void execute_regimm(CpuState &state, std::uint32_t instruction, ControlFlow &flow);
+    void execute_cop1(CpuState &state, std::uint32_t instruction, ControlFlow &flow);
     GuestAddress branch_address(const CpuState &state, std::uint32_t instruction) const;
     void skip_delay_slot(const CpuState &state, ControlFlow &flow) const;
     GuestAddress jump_address(const CpuState &state, std::uint32_t instruction) const;

@@ -17,6 +17,11 @@ struct CpuState
     std::array<std::uint32_t, 32> registers{};
     std::uint32_t high_register{};
     std::uint32_t low_register{};
+    // Raw IEEE-754 binary32 words preserve all transfer payloads.
+    std::array<std::uint32_t, 32> floating_point_registers{};
+    std::uint32_t floating_point_control{0x00000E00}; // PSP thread startup FCR31.
+    // Comparisons reach branches one instruction later; CFC1 sees FCR31 immediately.
+    bool floating_point_branch_condition{};
     // Allegrex LL/SC uses a link bit, without tracking a reserved address.
     bool load_linked{};
 

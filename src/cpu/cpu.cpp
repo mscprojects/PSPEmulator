@@ -17,6 +17,7 @@ constexpr std::uint32_t kAfterDelaySlotOffset = 2 * kInstructionSize;
 constexpr std::uint32_t kWordAlignmentMask = 0b11U;
 constexpr std::uint32_t kJumpRegionMask = 0xF0000000U;
 constexpr std::uint32_t kJumpTargetMask = 0x03FFFFFFU;
+constexpr std::uint32_t kFloatingPointCondition = 1U << 23;
 constexpr unsigned kRegisterBits = 32;
 constexpr std::uint32_t kShiftCountMask = 0b11111U;
 constexpr std::uint32_t kLowHalfwordMask = 0xFFFFU;
@@ -46,8 +47,8 @@ std::optional<Syscall> Cpu::step(CpuState &state)
     const auto instruction = memory_.read_u32(state.program_counter);
     // A caller may edit a saved state directly; $zero is always zero for operands.
     state.registers[0] = 0;
-    ControlFlow flow{state.next_program_counter,
-                     GuestAddress{state.next_program_counter.value_of() + kInstructionSize}};
+    ControlFlow flow{state.next_program_counter, GuestAddress{state.next_program_counter.value_of() + kInstructionSize},
+                     (state.floating_point_control & kFloatingPointCondition) != 0};
     std::optional<Syscall> syscall;
     if ((instruction & 0xFC00003FU) == 0x0000000CU)
     {
@@ -58,6 +59,7 @@ std::optional<Syscall> Cpu::step(CpuState &state)
     {
         execute(state, instruction, flow);
     }
+    state.floating_point_branch_condition = flow.floating_point_branch_condition;
     state.program_counter = flow.next_instruction;
     state.next_program_counter = flow.following_instruction;
     return syscall;
@@ -139,6 +141,9 @@ void Cpu::execute(CpuState &state, std::uint32_t instruction, ControlFlow &flow)
         break;
     case 0x0F: // LUI
         write_register(state, target, static_cast<std::uint32_t>(immediate) << 16);
+        break;
+    case 0x11: // COP1: scalar floating-point operations.
+        execute_cop1(state, instruction, flow);
         break;
     case 0x14: // BEQL
         if (state.registers[source] == state.registers[target])
@@ -254,6 +259,14 @@ void Cpu::execute(CpuState &state, std::uint32_t instruction, ControlFlow &flow)
     case 0x30: // LL: load an aligned word and set the Allegrex link bit.
         write_register(state, target, memory_.read_u32(data_address(state, instruction, DataAlignment::Word)));
         state.load_linked = true;
+        break;
+    case 0x31: // LWC1: transfer bits without numeric conversion.
+        state.floating_point_registers[target] =
+            memory_.read_u32(data_address(state, instruction, DataAlignment::Word));
+        break;
+    case 0x39: // SWC1
+        memory_.write_u32(data_address(state, instruction, DataAlignment::Word),
+                          state.floating_point_registers[target]);
         break;
     case 0x38: // SC: store when linked, then report success in rt. Allegrex keeps the bit set.
     {
@@ -612,6 +625,112 @@ void Cpu::execute_regimm(CpuState &state, std::uint32_t instruction, ControlFlow
     default:
         throw std::runtime_error("Unsupported Allegrex instruction");
     }
+}
+
+void Cpu::execute_cop1(CpuState &state, std::uint32_t instruction, ControlFlow &flow)
+{
+    const auto operation = (instruction >> 21) & 31U;
+    const auto target = (instruction >> 16) & 31U; // rt or ft
+    const auto source = (instruction >> 11) & 31U; // fs or control register
+    switch (operation)
+    {
+    case 0x00: // MFC1
+        write_register(state, target, state.floating_point_registers[source]);
+        return;
+    case 0x02: // CFC1: FCR0 is read-only; other control registers read zero.
+    {
+        std::uint32_t value = 0;
+        if (source == 31)
+        {
+            value = state.floating_point_control;
+        }
+        else if (source == 0)
+        {
+            value = 0x3351U;
+        }
+        write_register(state, target, value);
+        return;
+    }
+    case 0x04: // MTC1 (including writable $f0)
+        state.floating_point_registers[source] = state.registers[target];
+        return;
+    case 0x06: // CTC1
+        if (source == 31)
+        {
+            if ((state.registers[target] & 0x00020000U) != 0)
+            {
+                throw std::runtime_error("FPU unimplemented-operation exception is unsupported");
+            }
+            state.floating_point_control = state.registers[target] & 0x0181FFFFU;
+            // Unlike a comparison, CTC1 is immediately visible to a following branch.
+            flow.floating_point_branch_condition = (state.floating_point_control & kFloatingPointCondition) != 0;
+        }
+        return;
+    case 0x08: // BC1F, BC1T, BC1FL, BC1TL
+        if (target > 3)
+        {
+            throw std::runtime_error("Unsupported Allegrex FPU branch selector");
+        }
+        if (state.floating_point_branch_condition == ((target & 1U) != 0))
+        {
+            flow.following_instruction = branch_address(state, instruction);
+        }
+        else if ((target & 2U) != 0)
+        {
+            skip_delay_slot(state, flow);
+        }
+        return;
+    case 0x10:                                    // Single precision transfers and comparisons.
+        if ((instruction & 0x001F003FU) == 0x06U) // MOV.S: ft must be zero.
+        {
+            state.floating_point_registers[(instruction >> 6) & 31U] = state.floating_point_registers[source];
+            return;
+        }
+        if ((instruction & 0x7F0U) == 0x30U)
+        {
+            const auto left = state.floating_point_registers[source];
+            const auto right = state.floating_point_registers[target];
+            const auto left_magnitude = left & 0x7FFFFFFFU;
+            const auto right_magnitude = right & 0x7FFFFFFFU;
+            const bool left_nan = left_magnitude > 0x7F800000U;
+            const bool right_nan = right_magnitude > 0x7F800000U;
+            const bool unordered = left_nan || right_nan;
+            const auto predicate = instruction & 15U;
+            // Exception flags and guest exception entry belong to the arithmetic milestone.
+            if ((unordered && (predicate & 8U) != 0) || (left_nan && (left & 0x00400000U) == 0) ||
+                (right_nan && (right & 0x00400000U) == 0))
+            {
+                throw std::runtime_error("FPU invalid-operation exception is unsupported");
+            }
+            // Compare binary32 encodings directly, independent of host rounding/flush modes.
+            const bool equal = !unordered && (left == right || (left_magnitude == 0 && right_magnitude == 0));
+            bool less = false;
+            if (!unordered && !equal)
+            {
+                if (((left ^ right) & 0x80000000U) != 0)
+                {
+                    less = (left >> 31) != 0;
+                }
+                else if ((left >> 31) != 0)
+                {
+                    less = left > right;
+                }
+                else
+                {
+                    less = left < right;
+                }
+            }
+            const bool condition = ((predicate & 1U) != 0 && unordered) || ((predicate & 2U) != 0 && equal) ||
+                                   ((predicate & 4U) != 0 && less);
+            state.floating_point_control =
+                (state.floating_point_control & ~kFloatingPointCondition) | (condition ? kFloatingPointCondition : 0U);
+            return;
+        }
+        break;
+    default:
+        break;
+    }
+    throw std::runtime_error("Unsupported Allegrex FPU instruction");
 }
 
 GuestAddress Cpu::branch_address(const CpuState &state, std::uint32_t instruction) const

@@ -81,7 +81,7 @@ class CpuPrxExecutionTest : public testing::TestWithParam<const char *>
 
 TEST_P(CpuPrxExecutionTest, MatchesEntireHardwareOutput)
 {
-    const std::string directory = std::string(PSPAUTOTESTS_ROOT) + "/tests/cpu/cpu_alu/";
+    const std::string directory = std::string(PSPAUTOTESTS_ROOT) + "/tests/cpu/";
     std::ifstream input(directory + GetParam() + ".prx", std::ios::binary);
     std::ifstream expected_file(directory + GetParam() + ".expected", std::ios::binary);
     ASSERT_TRUE(input.is_open());
@@ -102,7 +102,9 @@ TEST_P(CpuPrxExecutionTest, MatchesEntireHardwareOutput)
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(BundledCpu, CpuPrxExecutionTest, testing::Values("cpu_alu", "cpu_branch2", "cpu_div"));
+INSTANTIATE_TEST_SUITE_P(BundledCpu, CpuPrxExecutionTest,
+                         testing::Values("cpu_alu/cpu_alu", "cpu_alu/cpu_branch2", "cpu_alu/cpu_div", "fpu/fpu_branch",
+                                         "fpu/fpu_branch_hazard"));
 
 TEST(ExecutionTest, BundledLsuMatchesHardwareOutputAtDifferentAddresses)
 {

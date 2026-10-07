@@ -56,6 +56,7 @@ if(BUILD_TESTING)
         src/common/tests/payload_reader_test.cpp
         src/memory/tests/memory_test.cpp
         src/cpu/tests/cpu_test.cpp
+        src/cpu/tests/cpu_fpu_test.cpp
         src/loader/tests/prx_test.cpp
         src/loader/tests/prx_reader_test.cpp
         src/runtime/tests/execution_test.cpp
