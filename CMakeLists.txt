@@ -31,6 +31,7 @@ endif()
 add_library(psp_core
     src/common/payload_reader.cpp
     src/cpu/cpu.cpp
+    src/cpu/floating_point.cpp
     src/memory/memory.cpp
     src/loader/prx_reader.cpp
     src/loader/prx.cpp
@@ -41,6 +42,17 @@ add_library(psp_core
     src/runtime/runtime.cpp
     src/runtime/syscall_dispatcher.cpp
 )
+# Dynamic guest rounding and exception flags must survive optimization.
+if(MSVC)
+    set_source_files_properties(src/cpu/floating_point.cpp PROPERTIES COMPILE_OPTIONS "/fp:strict")
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set_source_files_properties(src/cpu/floating_point.cpp PROPERTIES COMPILE_OPTIONS "-ffp-model=strict")
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set_source_files_properties(src/cpu/floating_point.cpp PROPERTIES COMPILE_OPTIONS "-frounding-math;-fno-fast-math;-ffp-contract=off")
+else()
+    message(FATAL_ERROR "Scalar FPU requires a compiler with strict floating-point support")
+endif()
+
 target_include_directories(psp_core PUBLIC src)
 target_link_libraries(psp_core PUBLIC project_options strong_type::strong_type PRIVATE fmt::fmt)
 

@@ -1,10 +1,10 @@
 # PSPEmulator
 
-An early PSP emulator project with a headless interpreter. It can load and execute the bundled `cpu_alu`, `cpu_branch2`, `cpu_div`, `lsu`, `llsc`, `fpu_branch`, and `fpu_branch_hazard` PRXs and reproduce their hardware-tested output. It does not yet run games.
+An early PSP emulator project with a headless interpreter. It can load and execute the bundled `cpu_alu`, `cpu_branch2`, `cpu_div`, `lsu`, `llsc`, `fpu_branch`, `fpu_branch_hazard`, `fpu`, `roundmode`, `rounding`, `fpu_nan`, and `fcr` PRXs and reproduce their hardware-tested output. It does not yet run games.
 
 ## Build
 
-Requires a C++23 compiler, CMake 3.20 or newer, fmt, and GoogleTest. The `ci` recipe also requires clang++, clang-format, and clang-tidy. `just` runs the common commands:
+Requires a C++23 compiler, CMake 3.20 or newer, fmt, and GoogleTest. Scalar FPU execution requires IEEE binary32 host evaluation and floating-point environment support; CMake enables strict floating-point compilation with GCC, Clang, or MSVC. The `ci` recipe also requires clang++, clang-format, and clang-tidy. `just` runs the common commands:
 
 ```sh
 just build
@@ -19,7 +19,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --parallel
 ```
 
-`just format` formats C++ files under `src/` with `clang-format`. `just ci` checks formatting, tests with GCC and Clang, runs clang-tidy on project source and headers, then builds and tests with address and undefined behavior sanitizers.
+`just format` formats C++ files under `src/` with `clang-format`. `just ci` checks formatting, tests Debug and Release builds with GCC and Clang, runs clang-tidy on project source and headers, then builds and tests with address and undefined behavior sanitizers.
 
 `psp::Memory` owns zeroed regions and explicit aliases sharing their backing bytes. PRX execution maps configured RAM with its PSP address views and 2 MiB of VRAM at `0x04000000`, also accessible at `0x44000000`. Reads and writes remain little-endian; the CPU applies instruction-specific alignment checks. Nonempty accesses must fit within one mapping and invalid accesses throw `std::out_of_range`. See [guest memory](docs/memory.md) for the layout, ownership, and current limits.
 
@@ -29,6 +29,7 @@ Project tests live beside the code they cover, under each component's `tests/` d
 
 ```sh
 ./build/pspemu third_party/pspautotests/tests/cpu/cpu_alu/cpu_alu.prx
+./build/pspemu third_party/pspautotests/tests/cpu/fpu/roundmode.prx
 ./build/pspemu program.prx --max-instructions 1000000
 ```
 
@@ -38,9 +39,9 @@ Tests and the CLI share `psp::execute_prx()` from `runtime/execution.hpp`. It ac
 
 `Runtime` coordinates execution; `Kernel` owns threads, synchronization, and the shared allocation arena, `GuestIo` captures output, and `SyscallDispatcher` binds imports and translates the guest register ABI. The CPU reports a named `Syscall` event after committing instruction control flow. Guest output structures use named fields and fixed little-endian layouts. See [runtime and syscall handling](docs/runtime.md) for ownership, service inputs and outputs, and scheduling limits.
 
-The runtime runs threads cooperatively until they delay, return, or exit. It supports startup thread creation and status queries, deterministic microsecond time queries and thread delays, periodic HLE vblank interrupts and interrupt masking, user-partition allocation, lightweight mutex creation/deletion and uncontended recursive locking, semaphore creation/deletion and immediately satisfiable waits/signals, standard stream identifiers, console writes, and the PSP autotest emulator device protocol. Guest timezone queries return UTC with daylight saving disabled. Formatting runs inside the PRX's libc; the host captures the bytes it emits. Guest directories are unavailable, and the runtime does not access host files. Blocking synchronization, callbacks, scheduling, allocation reclamation, and the PSP kernel are incomplete; unsupported calls and parameters fail when invoked. Thread status requires the 104-byte structure and reports delayed threads as waiting; scheduling counters remain zero. Guest time advances one microsecond per instruction, a provisional rate, and jumps to the next wakeup when all threads are waiting. Uncalled imports can remain unsupported. The CPU also supports `LL`/`SC` with syscall invalidation; periodic vblank delivery also clears the link bit, and bundled `llsc.prx` now matches its hardware output. Guest interrupt handlers and exception vectors remain unsupported. Scalar FPU transfers, comparisons, and branches are supported, including comparison-to-branch latency. FPU arithmetic, conversions, and invalid-operation exception handling remain unsupported. There is no graphics, audio, or VFPU support yet.
+The runtime runs threads cooperatively until they delay, return, or exit. It supports startup thread creation and status queries, deterministic microsecond time queries and thread delays, periodic HLE vblank interrupts and interrupt masking, user-partition allocation, lightweight mutex creation/deletion and uncontended recursive locking, semaphore creation/deletion and immediately satisfiable waits/signals, standard stream identifiers, console writes, and the PSP autotest emulator device protocol. Guest timezone queries return UTC with daylight saving disabled. Formatting runs inside the PRX's libc; the host captures the bytes it emits. Guest directories are unavailable, and the runtime does not access host files. Blocking synchronization, callbacks, scheduling, allocation reclamation, and the PSP kernel are incomplete; unsupported calls and parameters fail when invoked. Thread status requires the 104-byte structure and reports delayed threads as waiting; scheduling counters remain zero. Guest time advances one microsecond per instruction, a provisional rate, and jumps to the next wakeup when all threads are waiting. Uncalled imports can remain unsupported. The CPU also supports `LL`/`SC` with syscall invalidation; periodic vblank delivery also clears the link bit, and bundled `llsc.prx` now matches its hardware output. Guest interrupt handlers and exception vectors remain unsupported. Scalar FPU transfers, comparisons, branches, arithmetic, square root, and integer conversions are supported, including comparison-to-branch latency, four rounding modes, flush-to-zero, NaN handling, and FCR31 exception flags. Enabled FPU exceptions report host faults before committing the instruction; guest exception entry remains unsupported. There is no graphics, audio, or VFPU support yet.
 
-The integration tests execute the unmodified bundled `cpu_alu.prx`, `cpu_branch2.prx`, `cpu_div.prx`, `lsu.prx`, `llsc.prx`, `fpu_branch.prx`, and `fpu_branch_hazard.prx` from their ELF entry points at two load addresses, verify successful termination, and compare every output byte. The LSU expectation explicitly includes the final blank line emitted by the guest test but omitted from its bundled `.expected` file; the other expectations match their bundled files directly.
+The integration tests execute the unmodified bundled `cpu_alu.prx`, `cpu_branch2.prx`, `cpu_div.prx`, `lsu.prx`, `llsc.prx`, `fpu_branch.prx`, `fpu_branch_hazard.prx`, `fpu.prx`, `roundmode.prx`, `rounding.prx`, `fpu_nan.prx`, and `fcr.prx` from their ELF entry points at two load addresses, verify successful termination, and compare every output byte. The LSU expectation explicitly includes the final blank line emitted by the guest test but omitted from its bundled `.expected` file; the other expectations match their bundled files directly.
 
 ## CPU documentation
 

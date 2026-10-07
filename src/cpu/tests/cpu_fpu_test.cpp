@@ -3,6 +3,8 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cerrno>
+#include <cfenv>
 #include <cstdint>
 #include <stdexcept>
 
@@ -17,12 +19,39 @@ constexpr std::uint32_t kProgramBase = 0x08800000;
 class FpuTest : public testing::Test
 {
 protected:
+    void SetUp() override
+    {
+        ASSERT_EQ(std::fegetenv(&saved_environment), 0);
+        saved_errno = errno;
+    }
+
+    void TearDown() override
+    {
+        std::fesetenv(&saved_environment);
+        errno = saved_errno;
+    }
+
+    // Opcode fields, operand payloads, and FCR31 are separately encoded guest words.
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+    void arithmetic(std::uint32_t function, std::uint32_t left, std::uint32_t right, std::uint32_t control = 0)
+    {
+        state = CpuState{.program_counter = GuestAddress{kProgramBase}};
+        state.floating_point_registers[1] = left;
+        state.floating_point_registers[2] = right;
+        state.floating_point_control = control;
+        const auto target = function <= 3 ? 2U << 16 : 0U;
+        const auto format = function == 0x20 ? 0x46800000U : 0x46000000U;
+        instruction(format | target | (1U << 11) | (3U << 6) | function);
+    }
+
     void instruction(std::uint32_t word)
     {
         memory.write_u32(state.program_counter, word);
         cpu.step(state);
     }
 
+    std::fenv_t saved_environment{};
+    int saved_errno{};
     Memory memory{GuestAddress{kProgramBase}, 256};
     Cpu cpu{memory};
     CpuState state{.program_counter = GuestAddress{kProgramBase}};
@@ -127,6 +156,7 @@ TEST_F(FpuTest, ComparesFiniteValuesZerosInfinitiesSubnormalsAndQuietNans)
         ComparisonCase{0x7FC12345, 0x3F800000, 0xAA}, // left NaN
         ComparisonCase{0x3F800000, 0xFFC12345, 0xAA}, // right NaN
         ComparisonCase{0x7FC12345, 0x7FC12345, 0xAA}, // NaN isn't equal to itself
+        ComparisonCase{0x7FBFFFFF, 0x7FBFFFFF, 0xAA}, // libc NAN in the bundled fpu.prx
     };
     for (const auto &entry : cases)
     {
@@ -223,12 +253,195 @@ TEST_F(FpuTest, MemoryFaultsPreserveFloatingPointStateAndPendingBranch)
 
 TEST_F(FpuTest, RejectsInvalidOperationExceptionsWithoutCommittingState)
 {
-    for (const auto word : {0x4601003AU, 0x46010032U, 0x44C8F800U, 0x45040000U})
+    for (const auto word : {0x4601003AU, 0x44C8F800U, 0x45040000U})
     {
         state = CpuState{.program_counter = GuestAddress{kProgramBase}};
-        state.floating_point_registers[0] = word == 0x46010032 ? 0x7F812345 : 0x7FC12345;
+        state.floating_point_registers[0] = 0x7FC12345;
         state.floating_point_registers[1] = 0x3F800000;
         state.registers[8] = 0x00020000;
+        memory.write_u32(state.program_counter, word);
+        const auto before = state;
+        EXPECT_THROW(cpu.step(state), std::runtime_error);
+        EXPECT_EQ(state, before);
+    }
+}
+
+TEST_F(FpuTest, ArithmeticAndConversionsFollowGuestRoundingWithFixedModeOverrides)
+{
+    constexpr std::array positive_sum{0x3F800000U, 0x3F800000U, 0x3F800001U, 0x3F800000U};
+    constexpr std::array negative_sum{0xBF800000U, 0xBF800000U, 0xBF800000U, 0xBF800001U};
+    constexpr std::array quotient{0x3EAAAAABU, 0x3EAAAAAAU, 0x3EAAAAABU, 0x3EAAAAAAU};
+    constexpr std::array square_root{0x3FB504F3U, 0x3FB504F3U, 0x3FB504F4U, 0x3FB504F3U};
+    constexpr std::array integer_to_float{0x4B800000U, 0x4B800000U, 0x4B800001U, 0x4B800000U};
+    constexpr std::array converted{2U, 2U, 3U, 2U};
+    for (unsigned mode = 0; mode < 4; ++mode)
+    {
+        SCOPED_TRACE(mode);
+        arithmetic(0, 0x3F800000, 0x33800000, mode); // 1 + 2^-24
+        EXPECT_EQ(state.floating_point_registers[3], positive_sum[mode]);
+        EXPECT_EQ(state.floating_point_control, mode | 0x00001004U);
+        arithmetic(1, 0xBF800000, 0x33800000, mode); // -1 - 2^-24
+        EXPECT_EQ(state.floating_point_registers[3], negative_sum[mode]);
+        arithmetic(3, 0x3F800000, 0x40400000, mode); // 1 / 3
+        EXPECT_EQ(state.floating_point_registers[3], quotient[mode]);
+        arithmetic(4, 0x40000000, 0, mode); // sqrt(2)
+        EXPECT_EQ(state.floating_point_registers[3], square_root[mode]);
+        arithmetic(0x20, 16'777'217, 0, mode); // cvt.s.w
+        EXPECT_EQ(state.floating_point_registers[3], integer_to_float[mode]);
+        EXPECT_EQ(state.floating_point_control, mode | 0x00001004U);
+        arithmetic(0x24, 0x40200000, 0, mode); // cvt.w.s 2.5
+        EXPECT_EQ(state.floating_point_registers[3], converted[mode]);
+        for (const auto &entry :
+             {std::array{0x0CU, 2U}, std::array{0x0DU, 2U}, std::array{0x0EU, 3U}, std::array{0x0FU, 2U}})
+        {
+            arithmetic(entry[0], 0x40200000, 0, mode);
+            EXPECT_EQ(state.floating_point_registers[3], entry[1]);
+            EXPECT_EQ(state.floating_point_control, mode | 0x00001004U);
+        }
+    }
+}
+
+TEST_F(FpuTest, ConversionsSaturateWithoutOutOfRangeIntegerCasts)
+{
+    for (const auto &entry : {std::array{0x4F000000U, 0x7FFFFFFFU}, std::array{0xCF000001U, 0x80000000U},
+                              std::array{0x7F800000U, 0x7FFFFFFFU}, std::array{0xFF800000U, 0x80000000U},
+                              std::array{0x7FC12345U, 0x7FFFFFFFU}, std::array{0xFFC12345U, 0x7FFFFFFFU}})
+    {
+        arithmetic(0x24, entry[0], 0);
+        EXPECT_EQ(state.floating_point_registers[3], entry[1]);
+        EXPECT_EQ(state.floating_point_control, 0x00010040U);
+    }
+    arithmetic(0x24, 0xCF000000, 0); // INT32_MIN is valid.
+    EXPECT_EQ(state.floating_point_registers[3], 0x80000000U);
+    EXPECT_EQ(state.floating_point_control, 0U);
+}
+
+TEST_F(FpuTest, RecordsAllExceptionClassesAndFlushesTinyResults)
+{
+    // Result and FCR31 values follow fcr.expected, roundmode.expected, and IEEE divide by zero.
+    constexpr std::array cases{
+        std::array{4U, 0xBF800000U, 0U, 0x7FC00000U, 0x00010040U},          // sqrt(-1): invalid
+        std::array{3U, 0x3F800000U, 0U, 0x7F800000U, 0x00008020U},          // 1/0: divide by zero
+        std::array{2U, 0x7F7FFFFFU, 0x7F7FFFFFU, 0x7F800000U, 0x00005014U}, // overflow + inexact
+        std::array{3U, 0x00800000U, 0x40400000U, 0x002AAAABU, 0x0000300CU}, // underflow + inexact
+        std::array{3U, 0x3F800000U, 0x40400000U, 0x3EAAAAABU, 0x00001004U}, // inexact
+    };
+    for (const auto &entry : cases)
+    {
+        arithmetic(entry[0], entry[1], entry[2]);
+        EXPECT_EQ(state.floating_point_registers[3], entry[3]);
+        EXPECT_EQ(state.floating_point_control, entry[4]);
+    }
+    arithmetic(2, 0x00800000, 0x3F000000); // Exact subnormal preserved without FS.
+    EXPECT_EQ(state.floating_point_registers[3], 0x00400000U);
+    for (const auto &entry : {std::array{0x00800000U, 0U}, std::array{0x80800000U, 0x80000000U}})
+    {
+        arithmetic(2, entry[0], 0x3F000000, 0x01000000);
+        EXPECT_EQ(state.floating_point_registers[3], entry[1]);
+        EXPECT_EQ(state.floating_point_control, 0x0100300CU);
+    }
+}
+
+TEST_F(FpuTest, StickyFlagsAccumulateWhileEachOperationReplacesCauses)
+{
+    arithmetic(4, 0xBF800000, 0);
+    state.floating_point_registers[1] = 0x3F800000;
+    state.floating_point_registers[2] = 0x3F800000;
+    instruction(0x460208C0);                              // add.s $f3, $f1, $f2 (exact)
+    EXPECT_EQ(state.floating_point_control, 0x00000040U); // Invalid remains sticky, cause cleared.
+    state.floating_point_registers[2] = 0;
+    instruction(0x460208C3); // div.s: new divide-by-zero cause and flag.
+    EXPECT_EQ(state.floating_point_control, 0x00008060U);
+    state.floating_point_registers[1] = 0x7FBFFFFF;
+    instruction(0x46000831); // c.un.s $f1, $f0: quiet compare accepts libc NAN.
+    EXPECT_EQ(state.floating_point_control, 0x00800060U);
+    instruction(0x46000839); // c.ngle.s: signaling predicate, exceptions disabled.
+    EXPECT_EQ(state.floating_point_control, 0x00810060U);
+}
+
+TEST_F(FpuTest, PropagatesNanPayloadsAndBitOperationsPreserveExceptionStatus)
+{
+    arithmetic(0, 0xFFC12345, 0x7FC54321);
+    EXPECT_EQ(state.floating_point_registers[3], 0xFFC12345U); // First NaN wins.
+    arithmetic(2, 0x3F800000, 0x7F800001);
+    EXPECT_EQ(state.floating_point_registers[3], 0x7FC00001U); // Quiet the payload.
+    for (const auto &entry : {std::array{5U, 0x7F812345U}, std::array{6U, 0xFF812345U}, std::array{7U, 0x7F812345U}})
+    {
+        arithmetic(entry[0], 0xFF812345, 0, 0x0101F07C);
+        EXPECT_EQ(state.floating_point_registers[3], entry[1]);
+        EXPECT_EQ(state.floating_point_control, 0x0101F07CU);
+    }
+    state.floating_point_registers[1] = 0x40000000;
+    state.floating_point_registers[2] = 0x40400000;
+    state.floating_point_control = 0;
+    instruction(0x46020840); // add.s $f1, $f1, $f2: destination aliases left.
+    EXPECT_EQ(state.floating_point_registers[1], 0x40A00000U);
+    instruction(0x46020881); // sub.s $f2, $f1, $f2: destination aliases right.
+    EXPECT_EQ(state.floating_point_registers[2], 0x40000000U);
+}
+
+TEST_F(FpuTest, RestoresHostEnvironmentAndErrnoAfterSuccessAndGuestFaults)
+{
+    ASSERT_EQ(std::fesetround(FE_DOWNWARD), 0);
+    ASSERT_EQ(std::feclearexcept(FE_ALL_EXCEPT), 0);
+    ASSERT_EQ(std::feraiseexcept(FE_DIVBYZERO), 0);
+    errno = ERANGE;
+    arithmetic(0, 0x3F800000, 0x33800000, 2); // Guest upward despite host downward.
+    EXPECT_EQ(state.floating_point_registers[3], 0x3F800001U);
+    EXPECT_EQ(std::fegetround(), FE_DOWNWARD);
+    EXPECT_EQ(std::fetestexcept(FE_ALL_EXCEPT), FE_DIVBYZERO);
+    EXPECT_EQ(errno, ERANGE);
+    arithmetic(4, 0xBF800000, 0); // libm may set errno for sqrt(-1).
+    EXPECT_EQ(errno, ERANGE);
+    EXPECT_EQ(std::fetestexcept(FE_ALL_EXCEPT), FE_DIVBYZERO);
+    state.registers[8] = 0;
+    state.floating_point_registers[1] = 0xBF800000;
+    state.floating_point_control = 0x00000800;           // Enable invalid-operation exception.
+    instruction(0x10000007);                             // integer branch to current PC + 32
+    memory.write_u32(state.program_counter, 0x460008C4); // sqrt.s in its delay slot
+    const auto before = state;
+    EXPECT_THROW(cpu.step(state), std::runtime_error);
+    EXPECT_EQ(state, before);
+    EXPECT_EQ(std::fegetround(), FE_DOWNWARD);
+    EXPECT_EQ(std::fetestexcept(FE_ALL_EXCEPT), FE_DIVBYZERO);
+    EXPECT_EQ(errno, ERANGE);
+    state.floating_point_control = 0; // Disable the trap and retry the same delay slot.
+    cpu.step(state);
+    EXPECT_EQ(state.program_counter, before.next_program_counter);
+    EXPECT_EQ(state.floating_point_registers[3], 0x7FC00000U);
+}
+
+TEST_F(FpuTest, EnabledExceptionClassesAndCtcCausesFaultBeforeCommitting)
+{
+    for (const auto &entry : {std::array{0U, 0x3F800000U, 0x33800000U, 0x00000080U}, // inexact
+                              std::array{3U, 0x00800000U, 0x40400000U, 0x00000100U}, // underflow
+                              std::array{2U, 0x7F7FFFFFU, 0x7F7FFFFFU, 0x00000200U}, // overflow
+                              std::array{3U, 0x3F800000U, 0U, 0x00000400U}})         // divide by zero
+    {
+        state = CpuState{.program_counter = GuestAddress{kProgramBase}};
+        state.floating_point_registers[1] = entry[1];
+        state.floating_point_registers[2] = entry[2];
+        state.floating_point_control = entry[3];
+        memory.write_u32(state.program_counter, 0x460208C0 | entry[0]);
+        const auto before = state;
+        EXPECT_THROW(cpu.step(state), std::runtime_error);
+        EXPECT_EQ(state, before);
+    }
+    state.registers[8] = 0x00010800; // Invalid cause plus invalid enable.
+    memory.write_u32(state.program_counter, 0x44C8F800);
+    const auto before = state;
+    EXPECT_THROW(cpu.step(state), std::runtime_error);
+    EXPECT_EQ(state, before);
+}
+
+TEST_F(FpuTest, RejectsWrongFormatsAndReservedUnaryOperands)
+{
+    for (const auto word : {0x460008E0U,  // cvt.s.w requires word, not single, format
+                            0x468008E4U,  // cvt.w.s requires single, not word, format
+                            0x460208C4U,  // sqrt.s has a reserved ft operand
+                            0x460008E1U}) // unsupported function
+    {
+        state = CpuState{.program_counter = GuestAddress{kProgramBase}};
         memory.write_u32(state.program_counter, word);
         const auto before = state;
         EXPECT_THROW(cpu.step(state), std::runtime_error);

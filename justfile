@@ -16,6 +16,15 @@ clang-test:
     cmake --build build-clang --parallel
     ctest --test-dir build-clang --output-on-failure --no-tests=error
 
+# Strict floating-point behavior must also hold after optimization.
+release-test:
+    cmake -S . -B build-release -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release
+    cmake --build build-release --parallel
+    ctest --test-dir build-release --output-on-failure --no-tests=error
+    cmake -S . -B build-release-clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
+    cmake --build build-release-clang --parallel
+    ctest --test-dir build-release-clang --output-on-failure --no-tests=error
+
 format:
     find src -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) -print0 | xargs -0 -r clang-format -i
 
@@ -34,5 +43,6 @@ ci:
     just format-check
     just test
     just clang-test
+    just release-test
     just tidy
     just sanitizers

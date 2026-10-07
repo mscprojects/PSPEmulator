@@ -1,5 +1,7 @@
 #include "cpu/cpu.hpp"
 
+#include "cpu/floating_point.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cstdint>
@@ -661,7 +663,12 @@ void Cpu::execute_cop1(CpuState &state, std::uint32_t instruction, ControlFlow &
             {
                 throw std::runtime_error("FPU unimplemented-operation exception is unsupported");
             }
-            state.floating_point_control = state.registers[target] & 0x0181FFFFU;
+            const auto value = state.registers[target];
+            if (((value >> 12) & (value >> 7) & 31U) != 0)
+            {
+                throw std::runtime_error("Enabled Allegrex FPU exception in CTC1");
+            }
+            state.floating_point_control = value & 0x0181FFFFU;
             // Unlike a comparison, CTC1 is immediately visible to a following branch.
             flow.floating_point_branch_condition = (state.floating_point_control & kFloatingPointCondition) != 0;
         }
@@ -680,10 +687,30 @@ void Cpu::execute_cop1(CpuState &state, std::uint32_t instruction, ControlFlow &
             skip_delay_slot(state, flow);
         }
         return;
-    case 0x10:                                    // Single precision transfers and comparisons.
-        if ((instruction & 0x001F003FU) == 0x06U) // MOV.S: ft must be zero.
+    case 0x14: // Word format: CVT.S.W.
+        if ((instruction & 0x001F003FU) != 0x20U)
         {
-            state.floating_point_registers[(instruction >> 6) & 31U] = state.floating_point_registers[source];
+            break;
+        }
+        [[fallthrough]];
+    case 0x10: // Single precision arithmetic, transfers, and comparisons.
+        if (operation == 0x14 || (instruction & 0x3FU) < 0x30U)
+        {
+            const auto function = instruction & 0x3FU;
+            if ((operation == 0x10 && function == 0x20) || (function > 3 && target != 0))
+            {
+                break;
+            }
+            const auto result = evaluate_floating_point(
+                static_cast<FloatingPointOperation>(function), state.floating_point_registers[source],
+                state.floating_point_registers[target], state.floating_point_control);
+            // MOV/ABS/NEG are bit operations and leave exception status unchanged.
+            if (function != 5 && function != 6 && function != 7)
+            {
+                state.floating_point_control =
+                    floating_point_control_after(state.floating_point_control, result.exceptions);
+            }
+            state.floating_point_registers[(instruction >> 6) & 31U] = result.value;
             return;
         }
         if ((instruction & 0x7F0U) == 0x30U)
@@ -696,12 +723,10 @@ void Cpu::execute_cop1(CpuState &state, std::uint32_t instruction, ControlFlow &
             const bool right_nan = right_magnitude > 0x7F800000U;
             const bool unordered = left_nan || right_nan;
             const auto predicate = instruction & 15U;
-            // Exception flags and guest exception entry belong to the arithmetic milestone.
-            if ((unordered && (predicate & 8U) != 0) || (left_nan && (left & 0x00400000U) == 0) ||
-                (right_nan && (right & 0x00400000U) == 0))
-            {
-                throw std::runtime_error("FPU invalid-operation exception is unsupported");
-            }
+            // Quiet Allegrex compares accept both NaN encodings (including libc's
+            // 0x7FBFFFFF NAN); the predicate's signaling bit selects invalid operation.
+            const bool invalid = unordered && (predicate & 8U) != 0;
+            const auto control = floating_point_control_after(state.floating_point_control, invalid ? 16U : 0U);
             // Compare binary32 encodings directly, independent of host rounding/flush modes.
             const bool equal = !unordered && (left == right || (left_magnitude == 0 && right_magnitude == 0));
             bool less = false;
@@ -723,7 +748,7 @@ void Cpu::execute_cop1(CpuState &state, std::uint32_t instruction, ControlFlow &
             const bool condition = ((predicate & 1U) != 0 && unordered) || ((predicate & 2U) != 0 && equal) ||
                                    ((predicate & 4U) != 0 && less);
             state.floating_point_control =
-                (state.floating_point_control & ~kFloatingPointCondition) | (condition ? kFloatingPointCondition : 0U);
+                (control & ~kFloatingPointCondition) | (condition ? kFloatingPointCondition : 0U);
             return;
         }
         break;

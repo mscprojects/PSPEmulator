@@ -104,7 +104,8 @@ TEST_P(CpuPrxExecutionTest, MatchesEntireHardwareOutput)
 
 INSTANTIATE_TEST_SUITE_P(BundledCpu, CpuPrxExecutionTest,
                          testing::Values("cpu_alu/cpu_alu", "cpu_alu/cpu_branch2", "cpu_alu/cpu_div", "fpu/fpu_branch",
-                                         "fpu/fpu_branch_hazard"));
+                                         "fpu/fpu_branch_hazard", "fpu/fpu", "fpu/roundmode", "fpu/rounding",
+                                         "fpu/fpu_nan", "fpu/fcr"));
 
 TEST(ExecutionTest, BundledLsuMatchesHardwareOutputAtDifferentAddresses)
 {
