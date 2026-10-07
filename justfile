@@ -3,34 +3,26 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 default: build
 
 configure:
-    cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+    cmake -S . -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug
 
 build: configure
-    cmake --build build --parallel
+    cmake --build build --parallel "$(nproc)"
 
-# Each test runs in its own process; default to the available CPU count.
+# Run tests in separate processes, one worker per available CPU.
 test: build
-    ctest --test-dir build --parallel "${CTEST_PARALLEL_LEVEL:-$(nproc)}" --output-on-failure --no-tests=error
-
-clang-test:
-    cmake -S . -B build-clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug
-    cmake --build build-clang --parallel
-    ctest --test-dir build-clang --parallel "${CTEST_PARALLEL_LEVEL:-$(nproc)}" --output-on-failure --no-tests=error
+    ctest --test-dir build --parallel "$(nproc)" --output-on-failure --no-tests=error
 
 release-build:
-    cmake -S . -B build-release -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release
-    cmake --build build-release --parallel
+    cmake -S . -B build-release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
+    cmake --build build-release --parallel "$(nproc)"
 
 # Fast iteration on complete guest PRXs, including hardware-output comparisons.
 prx-test: release-build
-    ctest --test-dir build-release --parallel "${CTEST_PARALLEL_LEVEL:-$(nproc)}" --tests-regex 'BundledCpu/|ExecutionTest\.Bundled(Lsu|Llsc)' --output-on-failure --no-tests=error
+    ctest --test-dir build-release --parallel "$(nproc)" --tests-regex 'BundledCpu/|ExecutionTest\.Bundled(Lsu|Llsc)' --output-on-failure --no-tests=error
 
 # Strict floating-point behavior must also hold after optimization.
 release-test: release-build
-    ctest --test-dir build-release --parallel "${CTEST_PARALLEL_LEVEL:-$(nproc)}" --output-on-failure --no-tests=error
-    cmake -S . -B build-release-clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
-    cmake --build build-release-clang --parallel
-    ctest --test-dir build-release-clang --parallel "${CTEST_PARALLEL_LEVEL:-$(nproc)}" --output-on-failure --no-tests=error
+    ctest --test-dir build-release --parallel "$(nproc)" --output-on-failure --no-tests=error
 
 format:
     find src -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) -print0 | xargs -0 -r clang-format -i
@@ -42,14 +34,13 @@ tidy: configure
     find src -type f -name '*.cpp' -print0 | xargs -0 -r clang-tidy -p build --warnings-as-errors='*' --header-filter='^{{justfile_directory()}}/src/'
 
 sanitizers:
-    cmake -S . -B build-san -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPSPEMU_ENABLE_SANITIZERS=ON
-    cmake --build build-san --parallel
-    ctest --test-dir build-san --parallel "${CTEST_PARALLEL_LEVEL:-$(nproc)}" --output-on-failure --no-tests=error
+    cmake -S . -B build-san -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPSPEMU_ENABLE_SANITIZERS=ON
+    cmake --build build-san --parallel "$(nproc)"
+    ctest --test-dir build-san --parallel "$(nproc)" --output-on-failure --no-tests=error
 
 ci:
     just format-check
     just test
-    just clang-test
     just release-test
     just tidy
     just sanitizers
