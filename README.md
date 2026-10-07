@@ -21,7 +21,7 @@ cmake --build build --parallel "$(nproc)"
 
 `just test` runs the complete test suite, including all bundled PRX hardware-output comparisons.
 
-`just format` formats C++ files under `src/` with `clang-format`. `just tidy` runs clang-tidy through CMake’s native `CMAKE_CXX_CLANG_TIDY` integration during a clean parallel build in `build-tidy`, using the repository’s `.clang-tidy` configuration.
+`just format` and `just format-check` invoke CMake’s `format` and `format-check` targets for C++ files under `src/`, using `clang-format`. `just tidy` runs clang-tidy through CMake’s native `CMAKE_CXX_CLANG_TIDY` integration during a clean parallel build in `build-tidy`, using the repository’s `.clang-tidy` configuration.
 
 `just ci` checks formatting, tests Debug and Release builds with Clang, runs `tidy`, then builds and tests a `RelWithDebInfo` build with address and undefined behavior sanitizers. Debug builds use `-O1` for faster PRX execution while retaining debug symbols and assertions. The sanitizer build retains debug symbols and frame pointers while enabling optimization. Builds and test runs use the CPU count reported by `nproc` for parallel workers.
 

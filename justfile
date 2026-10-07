@@ -18,11 +18,11 @@ release-test:
     cmake --build build-release --parallel "$(nproc)"
     ctest --test-dir build-release --parallel "$(nproc)" --output-on-failure --no-tests=error
 
-format:
-    find src -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) -print0 | xargs -0 -r clang-format -i
+format: configure
+    cmake --build build --target format --parallel "$(nproc)"
 
-format-check:
-    find src -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) -print0 | xargs -0 -r clang-format --dry-run --Werror
+format-check: configure
+    cmake --build build --target format-check --parallel "$(nproc)"
 
 tidy:
     cmake -S . -B build-tidy -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_CLANG_TIDY=clang-tidy

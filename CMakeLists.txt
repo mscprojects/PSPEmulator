@@ -13,6 +13,20 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(PSPEMU_ENABLE_SANITIZERS "Enable address and undefined behavior sanitizers" OFF)
 
+file(GLOB_RECURSE FORMAT_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
+)
+add_custom_target(format
+    COMMAND clang-format -i ${FORMAT_SOURCES}
+    VERBATIM
+)
+add_custom_target(format-check
+    COMMAND clang-format --dry-run --Werror ${FORMAT_SOURCES}
+    VERBATIM
+)
+
 find_package(fmt CONFIG REQUIRED)
 add_subdirectory(third_party/strong_type)
 
