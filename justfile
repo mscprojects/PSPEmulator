@@ -12,16 +12,10 @@ build: configure
 test: build
     ctest --test-dir build --parallel "$(nproc)" --output-on-failure --no-tests=error
 
-release-build:
+# Strict floating-point behavior must also hold after optimization.
+release-test:
     cmake -S . -B build-release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
     cmake --build build-release --parallel "$(nproc)"
-
-# Fast iteration on complete guest PRXs, including hardware-output comparisons.
-prx-test: release-build
-    ctest --test-dir build-release --parallel "$(nproc)" --tests-regex 'BundledCpu/|ExecutionTest\.Bundled(Lsu|Llsc)' --output-on-failure --no-tests=error
-
-# Strict floating-point behavior must also hold after optimization.
-release-test: release-build
     ctest --test-dir build-release --parallel "$(nproc)" --output-on-failure --no-tests=error
 
 format:

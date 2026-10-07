@@ -9,7 +9,6 @@ Requires Clang with C++23 support, CMake 3.20 or newer, fmt, and GoogleTest. Sca
 ```sh
 just build
 just test
-just prx-test
 just ci
 ```
 
@@ -20,7 +19,7 @@ cmake -S . -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAK
 cmake --build build --parallel "$(nproc)"
 ```
 
-`just prx-test` builds the Clang Release executable and runs only the bundled PRX hardware-output comparisons for fast iteration.
+`just test` runs the complete test suite, including all bundled PRX hardware-output comparisons.
 
 `just format` formats C++ files under `src/` with `clang-format`. `just tidy` runs clang-tidy through CMake’s native `CMAKE_CXX_CLANG_TIDY` integration during a clean parallel build in `build-tidy`, using the repository’s `.clang-tidy` configuration.
 
