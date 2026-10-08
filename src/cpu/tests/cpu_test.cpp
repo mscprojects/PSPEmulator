@@ -71,10 +71,16 @@ AluResult run_alu(std::uint32_t instruction, std::uint32_t left, std::uint32_t r
     const auto low = static_cast<std::uint32_t>(initial.accumulator);
     const auto high = static_cast<std::uint32_t>(initial.accumulator >> 32);
     load_program(memory, {
-                             0x3C080000 | (left >> 16), 0x35080000 | (left & 0xFFFF), 0x3C090000 | (right >> 16),
-                             0x35290000 | (right & 0xFFFF), 0x3C0A0000 | (initial.destination >> 16),
-                             0x354A0000 | (initial.destination & 0xFFFF), 0x3C0B0000 | (low >> 16),
-                             0x356B0000 | (low & 0xFFFF), 0x3C0C0000 | (high >> 16), 0x358C0000 | (high & 0xFFFF),
+                             0x3C080000 | (left >> 16),
+                             0x35080000 | (left & 0xFFFF),
+                             0x3C090000 | (right >> 16),
+                             0x35290000 | (right & 0xFFFF),
+                             0x3C0A0000 | (initial.destination >> 16),
+                             0x354A0000 | (initial.destination & 0xFFFF),
+                             0x3C0B0000 | (low >> 16),
+                             0x356B0000 | (low & 0xFFFF),
+                             0x3C0C0000 | (high >> 16),
+                             0x358C0000 | (high & 0xFFFF),
                              0x01600013, // mtlo $t3
                              0x01800011, // mthi $t4
                              instruction,
