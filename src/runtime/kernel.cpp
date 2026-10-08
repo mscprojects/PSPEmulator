@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -11,20 +12,28 @@ namespace psp::detail
 
 Kernel::Kernel(Memory &memory, GuestAddress load_address, std::size_t memory_size, std::span<const PrxSegment> segments,
                GuestAddress global_pointer)
-    : memory_(memory), heap_(load_address.value_of()),
-      stack_top_((static_cast<std::uint64_t>(load_address.value_of()) + memory_size) & ~std::uint64_t{255}),
-      global_pointer_(global_pointer), return_address_(GuestAddress{0})
+    : memory_(memory), global_pointer_(global_pointer), return_address_(GuestAddress{0})
 {
+    if (memory_size == 0 || memory_size > (std::uint64_t{1} << 32) - load_address.value_of())
+    {
+        throw std::invalid_argument("Kernel memory must fit in the 32-bit address space");
+    }
+    std::uint64_t begin = load_address.value_of();
+    const auto end = (begin + memory_size) & ~std::uint64_t{255};
     for (const auto &segment : segments)
     {
         if (segment.type == 1)
         {
-            heap_ = std::max(heap_, static_cast<std::uint64_t>(load_address.value_of()) + segment.virtual_address +
+            begin = std::max(begin, static_cast<std::uint64_t>(load_address.value_of()) + segment.virtual_address +
                                         segment.memory_size);
         }
     }
-    heap_ = (heap_ + 255) & ~std::uint64_t{255};
-    return_address_ = allocate_memory(256, AllocationDirection::Low);
+    begin = (begin + 255) & ~std::uint64_t{255};
+    if (begin < end)
+    {
+        free_ranges_.push_back({begin, end});
+    }
+    return_address_ = GuestAddress{static_cast<std::uint32_t>(allocate_memory(256, AllocationDirection::Low).begin)};
 }
 
 void Kernel::initialize(GuestAddress entry, std::span<const std::string> arguments)
@@ -56,7 +65,8 @@ std::uint32_t Kernel::create_thread(ThreadCreation creation)
     {
         throw std::runtime_error("Thread stack must contain at least 512 bytes");
     }
-    const auto stack = allocate_memory(creation.stack_size, AllocationDirection::High);
+    const auto stack =
+        GuestAddress{static_cast<std::uint32_t>(allocate_memory(creation.stack_size, AllocationDirection::High).begin)};
     CpuState state{.program_counter = creation.entry};
     state.registers[28] = global_pointer_.value_of();
     state.registers[31] = return_address_.value_of();
@@ -367,37 +377,90 @@ std::uint32_t Kernel::allocate_partition(PartitionAllocation allocation)
         throw std::runtime_error("Unsupported partition allocation");
     }
     const auto direction = allocation.type == 1 ? AllocationDirection::High : AllocationDirection::Low;
-    const auto address = allocate_memory(allocation.size, direction);
+    const auto range = allocate_memory(allocation.size, direction);
     const auto id = next_id_++;
-    blocks_.emplace(id, address);
+    blocks_.emplace(id, range);
     return id;
+}
+
+void Kernel::free_partition(std::uint32_t id)
+{
+    const auto range = blocks_.at(id);
+    auto position =
+        std::lower_bound(free_ranges_.begin(), free_ranges_.end(), range.begin,
+                         [](const MemoryRange &free, std::uint64_t address) { return free.begin < address; });
+    position = free_ranges_.insert(position, range);
+    if (position != free_ranges_.begin() && std::prev(position)->end == position->begin)
+    {
+        std::prev(position)->end = position->end;
+        position = std::prev(free_ranges_.erase(position));
+    }
+    if (std::next(position) != free_ranges_.end() && position->end == std::next(position)->begin)
+    {
+        position->end = std::next(position)->end;
+        free_ranges_.erase(std::next(position));
+    }
+    blocks_.erase(id);
 }
 
 std::uint32_t Kernel::free_memory_size() const
 {
-    return static_cast<std::uint32_t>(stack_top_ - heap_);
+    std::uint64_t total = 0;
+    for (const auto &range : free_ranges_)
+    {
+        total += range.end - range.begin;
+    }
+    return static_cast<std::uint32_t>(total);
+}
+
+std::uint32_t Kernel::largest_free_memory_size() const
+{
+    std::uint64_t largest = 0;
+    for (const auto &range : free_ranges_)
+    {
+        largest = std::max(largest, range.end - range.begin);
+    }
+    return static_cast<std::uint32_t>(largest);
 }
 
 GuestAddress Kernel::block_address(std::uint32_t id) const
 {
-    return blocks_.at(id);
+    return GuestAddress{static_cast<std::uint32_t>(blocks_.at(id).begin)};
 }
 
-GuestAddress Kernel::allocate_memory(std::uint32_t size, AllocationDirection direction)
+Kernel::MemoryRange Kernel::allocate_memory(std::uint32_t size, AllocationDirection direction)
 {
     const auto aligned_size = (static_cast<std::uint64_t>(size) + 255) & ~std::uint64_t{255};
-    if (size == 0 || heap_ > stack_top_ || aligned_size > stack_top_ - heap_)
+    if (size == 0)
     {
-        throw std::runtime_error("Guest memory exhausted");
+        throw std::runtime_error("Guest allocation size must be positive");
     }
-    if (direction == AllocationDirection::High)
+    for (std::size_t offset = 0; offset < free_ranges_.size(); ++offset)
     {
-        stack_top_ -= aligned_size;
-        return GuestAddress{static_cast<std::uint32_t>(stack_top_)};
+        const auto index = direction == AllocationDirection::Low ? offset : free_ranges_.size() - 1 - offset;
+        auto &range = free_ranges_[index];
+        if (aligned_size > range.end - range.begin)
+        {
+            continue;
+        }
+        MemoryRange allocation{};
+        if (direction == AllocationDirection::Low)
+        {
+            allocation = {range.begin, range.begin + aligned_size};
+            range.begin = allocation.end;
+        }
+        else
+        {
+            allocation = {range.end - aligned_size, range.end};
+            range.end = allocation.begin;
+        }
+        if (range.begin == range.end)
+        {
+            free_ranges_.erase(free_ranges_.begin() + static_cast<std::ptrdiff_t>(index));
+        }
+        return allocation;
     }
-    const auto address = GuestAddress{static_cast<std::uint32_t>(heap_)};
-    heap_ += aligned_size;
-    return address;
+    throw std::runtime_error("Guest memory exhausted");
 }
 
 void Kernel::place_arguments(Thread &thread, PayloadSpan arguments)

@@ -155,6 +155,59 @@ TEST(ExecutionTest, BundledLlscMatchesEntireHardwareOutputAtDifferentAddresses)
     }
 }
 
+TEST(ExecutionTest, SdkHelloWorldPrintsAndExitsAtDifferentAddresses)
+{
+    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/hello_world.prx", std::ios::binary);
+    ASSERT_TRUE(input.is_open());
+    const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    const auto parsed = read_prx(payload);
+    for (const std::uint32_t base : {0x08800000U, 0x08900000U})
+    {
+        SCOPED_TRACE(base);
+        ExecutionOptions options;
+        options.load_address = GuestAddress{base};
+        options.max_instructions = 1'000'000;
+        const auto result = execute_prx(parsed, options);
+        EXPECT_EQ(result.exit_code, 0);
+        EXPECT_EQ(result.output, "Hello World\n");
+        EXPECT_GT(result.instructions_executed, 0U);
+        EXPECT_LE(result.instructions_executed, options.max_instructions);
+    }
+}
+
+TEST(ExecutionTest, PartitionSyscallsReportFragmentationAndRestoreFreedMemory)
+{
+    ServicePrxFixture program("SysMemUserForUser", {0x237DBD4F, 0xB6D61D02, 0xA291F107, 0xF919F628});
+    program.call(3);
+    program.instruction(0x00408021); // move $s0, $v0: initial free bytes
+    program.argument(0, 2);
+    program.argument(2, 0);
+    program.argument(3, 256);
+    program.call(0);
+    program.instruction(0x00408821); // move $s1, $v0: first block ID
+    program.call(0);                 // A second live block separates the first from the remaining free range.
+    program.instruction(0x00409021); // move $s2, $v0: second block ID
+    program.instruction(0x02202021); // move $a0, $s1
+    program.call(1);
+    program.instruction(0x00409821); // move $s3, $v0: free must return zero
+    program.call(2);
+    program.instruction(0x0040A021); // move $s4, $v0: largest free range
+    program.call(3);
+    program.instruction(0x0054A823); // subu $s5, $v0, $s4: total minus largest = 256
+    program.instruction(0x02402021); // move $a0, $s2
+    program.call(1);
+    program.instruction(0x02629825); // or $s3, $s3, $v0: both frees must succeed
+    program.call(3);
+    program.instruction(0x0050A023); // subu $s4, $v0, $s0: capacity restored
+    program.call(2);
+    program.instruction(0x00501023); // subu $v0, $v0, $s0: largest range restored
+    program.instruction(0x00541025); // or $v0, $v0, $s4
+    program.instruction(0x00531025); // or $v0, $v0, $s3
+    program.instruction(0x3AB50100); // xori $s5, $s5, 256: fragmentation was one freed block
+    program.instruction(0x00551025); // or $v0, $v0, $s5: zero only when every check passes
+    EXPECT_EQ(execute_prx(program.finish()).exit_code, 0);
+}
+
 TEST(ExecutionTest, InterruptControlServicesRestoreNestedFlags)
 {
     ServicePrxFixture program("Kernel_Library", {0x092968F4, 0x5F10D406, 0xB55249D2});

@@ -143,10 +143,14 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
         switch (binding.nid)
         {
         case 0xA291F107: // sceKernelMaxFreeMemSize
+            return kernel_.largest_free_memory_size();
         case 0xF919F628: // sceKernelTotalFreeMemSize
             return kernel_.free_memory_size();
         case 0x237DBD4F: // sceKernelAllocPartitionMemory
             return kernel_.allocate_partition({.partition = arg(0), .type = arg(2), .size = arg(3)});
+        case 0xB6D61D02: // sceKernelFreePartitionMemory
+            kernel_.free_partition(arg(0));
+            return 0;
         case 0x9D9A5BA1: // sceKernelGetBlockHeadAddr
             return kernel_.block_address(arg(0)).value_of();
         default:

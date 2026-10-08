@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace psp::detail
 {
@@ -80,6 +81,12 @@ class Kernel
         std::uint32_t maximum;
     };
 
+    struct MemoryRange
+    {
+        std::uint64_t begin;
+        std::uint64_t end;
+    };
+
 public:
     Kernel(Memory &memory, GuestAddress load_address, std::size_t memory_size, std::span<const PrxSegment> segments,
            GuestAddress global_pointer);
@@ -124,22 +131,23 @@ public:
     void signal_semaphore(std::uint32_t id, std::uint32_t count);
 
     std::uint32_t allocate_partition(PartitionAllocation allocation);
+    void free_partition(std::uint32_t id);
     std::uint32_t free_memory_size() const;
+    std::uint32_t largest_free_memory_size() const;
     GuestAddress block_address(std::uint32_t id) const;
 
 private:
-    // Thread stacks and partition blocks share a monotonic arena. Neither end
-    // may cross the other; reclamation remains unsupported.
-    GuestAddress allocate_memory(std::uint32_t size, AllocationDirection direction);
+    // Thread stacks and partition blocks share address-ordered free ranges.
+    // Allocations use 256-byte alignment; only partition blocks can be freed.
+    MemoryRange allocate_memory(std::uint32_t size, AllocationDirection direction);
     void place_arguments(Thread &thread, PayloadSpan arguments);
     void wake_delayed_threads();
     GuestMutexWorkArea mutex_work_area(GuestAddress address) const;
     void validate_mutex_count(const GuestMutexWorkArea &work_area, std::uint32_t count) const;
 
     Memory &memory_;
-    std::uint64_t heap_;
-    std::uint64_t stack_top_;
-    std::map<std::uint32_t, GuestAddress> blocks_;
+    std::vector<MemoryRange> free_ranges_;
+    std::map<std::uint32_t, MemoryRange> blocks_;
     std::uint32_t next_id_{1};
     GuestAddress global_pointer_;
     GuestAddress return_address_;

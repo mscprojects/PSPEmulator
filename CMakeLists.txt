@@ -79,6 +79,9 @@ if(BUILD_TESTING)
         src/runtime/tests/kernel_test.cpp
     )
     target_link_libraries(psp_tests PRIVATE psp_core GTest::gtest_main)
-    target_compile_definitions(psp_tests PRIVATE PSPAUTOTESTS_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/third_party/pspautotests")
+    target_compile_definitions(psp_tests PRIVATE
+        PSPAUTOTESTS_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/third_party/pspautotests"
+        PSPEMU_RUNTIME_FIXTURES_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/tests/fixtures"
+    )
     gtest_discover_tests(psp_tests)
 endif()
