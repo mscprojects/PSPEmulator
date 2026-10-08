@@ -4,3 +4,6 @@
 [submodule "third_party/strong_type"]
 	path = third_party/strong_type
 	url = https://github.com/rollbear/strong_type.git
+[submodule "third_party/pspsdk"]
+	path = third_party/pspsdk
+	url = https://github.com/pspdev/pspsdk.git

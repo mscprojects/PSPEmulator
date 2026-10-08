@@ -27,7 +27,20 @@ cmake --build build --parallel "$(nproc)"
 
 `psp::Memory` owns zeroed regions and explicit aliases sharing their backing bytes. PRX execution maps configured RAM with its PSP address views and 2 MiB of VRAM at `0x04000000`, also accessible at `0x44000000`. Reads and writes remain little-endian; the CPU applies instruction-specific alignment checks. Nonempty accesses must fit within one mapping and invalid accesses throw `std::out_of_range`. See [guest memory](docs/memory.md) for the layout, ownership, and current limits.
 
-Project tests live beside the code they cover, under each component's `tests/` directory. Upstream PSP tests and the `strong_type` library are pinned in `third_party/` as submodules. After cloning, initialize them with `git submodule update --init --recursive`.
+Project tests live beside the code they cover, under each component's `tests/` directory. Upstream PSP tests, PSPSDK, and the `strong_type` library are pinned in `third_party/` as submodules. After cloning, initialize them with `git submodule update --init --recursive`.
+
+## Build homebrew PRXs
+
+The optional homebrew recipes require Ubuntu 24.04 x86_64, GNU Make, curl, tar, and sha256sum. `just setup-pspdev` installs the [PSPDEV v20261001 Ubuntu release](https://github.com/pspdev/pspdev/releases/tag/v20261001) under `~/.local/opt/pspdev/v20261001/`. It downloads the archive into `${XDG_CACHE_HOME:-$HOME/.cache}/pspdev/v20261001/`, verifies its pinned SHA-256, and checks that the compiler runs before installing it. Subsequent setup runs reuse the installation. The version, download URL, and checksum are pinned in `justfile`; the PSPSDK submodule matches the SDK revision recorded in that release's `build.txt`.
+
+```sh
+just setup-pspdev
+just homebrew
+```
+
+`just homebrew` also runs setup, then builds the unmodified SDK [Hello World PRX template](third_party/pspsdk/src/samples/template/prx_template/main.c) and [controller sample](third_party/pspsdk/src/samples/controller/basic/main.c). Outputs are `build-homebrew/template/prx_template/template.prx` and `build-homebrew/controller/basic/controller_basic.prx`. Sources and Makefiles are copied into the ignored build directory so building leaves the submodule clean. These recipes set `PSPDEV` and `PATH` only for their own commands; the normal emulator build and `just ci` do not require the PSP toolchain.
+
+Building a PRX does not imply that the emulator can execute it. The Hello World template currently stops at the unimplemented `sceKernelFreePartitionMemory` import; the controller sample stops at `sceGeEdramGetAddr` and also needs display, input, and callback services. Use the compiled PRXs to identify the next required CPU instructions and imports.
 
 ## Execute a PRX
 
