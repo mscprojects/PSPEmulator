@@ -28,6 +28,7 @@ add_custom_target(format-check
 )
 
 find_package(fmt CONFIG REQUIRED)
+find_package(SDL3 3.4.2 CONFIG REQUIRED)
 add_subdirectory(third_party/strong_type)
 
 add_library(project_options INTERFACE)
@@ -46,6 +47,7 @@ add_library(psp_core
     src/memory/memory.cpp
     src/loader/prx_reader.cpp
     src/loader/prx.cpp
+    src/runtime/display.cpp
     src/runtime/execution.cpp
     src/runtime/guest_io.cpp
     src/runtime/guest_structures.cpp
@@ -59,8 +61,11 @@ set_source_files_properties(src/cpu/floating_point.cpp PROPERTIES COMPILE_OPTION
 target_include_directories(psp_core PUBLIC src)
 target_link_libraries(psp_core PUBLIC project_options strong_type::strong_type PRIVATE fmt::fmt)
 
+add_library(psp_frontend src/frontend/window.cpp)
+target_link_libraries(psp_frontend PUBLIC psp_core SDL3::SDL3)
+
 add_executable(pspemu src/main.cpp)
-target_link_libraries(pspemu PRIVATE psp_core fmt::fmt)
+target_link_libraries(pspemu PRIVATE psp_frontend fmt::fmt)
 
 include(CTest)
 if(BUILD_TESTING)
@@ -74,6 +79,7 @@ if(BUILD_TESTING)
         src/cpu/tests/cpu_fpu_test.cpp
         src/loader/tests/prx_test.cpp
         src/loader/tests/prx_reader_test.cpp
+        src/runtime/tests/display_test.cpp
         src/runtime/tests/execution_test.cpp
         src/runtime/tests/guest_structures_test.cpp
         src/runtime/tests/kernel_test.cpp
@@ -84,4 +90,14 @@ if(BUILD_TESTING)
         PSPEMU_RUNTIME_FIXTURES_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/tests/fixtures"
     )
     gtest_discover_tests(psp_tests)
+
+    add_executable(psp_frontend_tests src/frontend/tests/window_test.cpp)
+    target_link_libraries(psp_frontend_tests PRIVATE psp_frontend GTest::gtest_main)
+    target_compile_definitions(psp_frontend_tests PRIVATE
+        PSPEMU_RUNTIME_FIXTURES_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/tests/fixtures"
+    )
+    # Isolate SDL from the desktop and host GPU drivers; software surfaces permit pixel readback.
+    gtest_discover_tests(psp_frontend_tests PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=offscreen\;SDL_RENDER_DRIVER=software\;SDL_FRAMEBUFFER_ACCELERATION=0"
+    )
 endif()

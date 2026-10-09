@@ -41,6 +41,14 @@ void Memory::map_alias(GuestAddress alias_base, GuestAddress region_base)
     mappings_.emplace(alias_base.value_of(), region->second);
 }
 
+void Memory::validate_range(GuestAddress address, std::size_t size) const
+{
+    if (size != 0)
+    {
+        checked_location(address, size);
+    }
+}
+
 std::uint8_t Memory::read_u8(GuestAddress address) const
 {
     return static_cast<std::uint8_t>(read_le(address, 1));

@@ -21,13 +21,13 @@ TEST(KernelTest, ThreadSelectionPreservesSeparateCpuStatesAndReturnStatus)
     EXPECT_EQ(kernel.thread_status(second).status.value(), 16U); // created, not started
     kernel.start_thread(second, GuestAddress{0}, 0);
     EXPECT_THROW(kernel.start_thread(second, GuestAddress{0}, 0), std::runtime_error);
-    EXPECT_TRUE(kernel.select_next_thread());
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.current_thread_id(), first);
     EXPECT_EQ(kernel.thread_status(second).status.value(), 2U); // ready
 
     const auto first_state = kernel.current_thread_state();
     kernel.exit_thread();
-    EXPECT_TRUE(kernel.select_next_thread());
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.current_thread_id(), second);
     EXPECT_EQ(kernel.current_thread_state().program_counter, GuestAddress{0x800});
     EXPECT_EQ(kernel.current_thread_state().next_program_counter, GuestAddress{0x804});
@@ -43,7 +43,7 @@ TEST(KernelTest, ThreadSelectionPreservesSeparateCpuStatesAndReturnStatus)
     auto &state = kernel.current_thread_state();
     state.program_counter = GuestAddress{state.registers[31]};
     state.registers[2] = 7;
-    EXPECT_FALSE(kernel.select_next_thread());
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Finished);
     EXPECT_EQ(kernel.exit_code(), 7);
 }
 
@@ -64,13 +64,13 @@ TEST(KernelTest, DelayedThreadResumesAfterAnotherThreadExits)
     EXPECT_EQ(kernel.thread_status(first).status.value(), 4U);
     EXPECT_EQ(kernel.thread_status(first).wait_type.value(), 2U);
     EXPECT_EQ(state, saved); // Dispatch has not supplied the delayed result yet.
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.current_thread_id(), second);
     EXPECT_EQ(kernel.system_time(), 10U); // A ready thread prevents an idle jump.
     kernel.advance_time(500);
     kernel.current_thread_state().registers[2] = 7;
     kernel.exit_thread();
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.current_thread_id(), first);
     EXPECT_EQ(kernel.system_time(), 2010U);
     auto resumed = saved;
@@ -78,10 +78,10 @@ TEST(KernelTest, DelayedThreadResumesAfterAnotherThreadExits)
     EXPECT_EQ(kernel.current_thread_state(), resumed);
     EXPECT_EQ(kernel.thread_status(first).wait_type.value(), 0U);
     // Repeated selections must not enqueue the resumed thread twice.
-    EXPECT_TRUE(kernel.select_next_thread());
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     kernel.current_thread_state().registers[2] = 9;
     kernel.exit_thread();
-    EXPECT_FALSE(kernel.select_next_thread());
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Finished);
     EXPECT_EQ(kernel.exit_code(), 9);
 }
 
@@ -93,7 +93,8 @@ TEST(KernelTest, DelaySyscallDefersItsResultAndPreservesCommittedReturnAddress)
     GuestIo io(memory);
     const std::array imports{PrxImportLibrary{
         .name = "ThreadManForUser", .version = 0, .attributes = 0, .functions = {{0xCEADEB47, GuestAddress{0x800}}}}};
-    SyscallDispatcher dispatcher(memory, kernel, io, imports);
+    Display display(memory);
+    SyscallDispatcher dispatcher(memory, kernel, io, display, imports);
     Cpu cpu(memory);
     auto &state = kernel.current_thread_state();
     state.registers[31] = 0x900;
@@ -109,7 +110,7 @@ TEST(KernelTest, DelaySyscallDefersItsResultAndPreservesCommittedReturnAddress)
     }
     EXPECT_EQ(state.registers[2], 0xDEADBEEFU);
     EXPECT_EQ(kernel.thread_status(0).status.value(), 4U);
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.system_time(), 2000U);
     EXPECT_EQ(state.program_counter, GuestAddress{0x900});
     EXPECT_EQ(state.registers[2], 0U);
@@ -126,27 +127,27 @@ TEST(KernelTest, IdleClockAdvancesToEarliestDeadlineAndPreservesEqualDeadlineOrd
     kernel.start_thread(second, GuestAddress{0}, 0);
     kernel.start_thread(third, GuestAddress{0}, 0);
     kernel.delay_thread(100);
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     ASSERT_EQ(kernel.current_thread_id(), second);
     kernel.delay_thread(20);
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     ASSERT_EQ(kernel.current_thread_id(), third);
     kernel.delay_thread(20);
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.system_time(), 20U);
     EXPECT_EQ(kernel.current_thread_id(), second);
     EXPECT_EQ(kernel.thread_status(third).status.value(), 2U);
     EXPECT_EQ(kernel.thread_status(first).status.value(), 4U);
     kernel.exit_thread();
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.current_thread_id(), third);
     EXPECT_EQ(kernel.system_time(), 20U);
     kernel.exit_thread();
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.current_thread_id(), first);
     EXPECT_EQ(kernel.system_time(), 100U);
     kernel.exit_thread();
-    EXPECT_FALSE(kernel.select_next_thread());
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Finished);
 }
 
 TEST(KernelTest, ElapsedDelayBecomesReadyWithoutPreemptingTheRunningThread)
@@ -158,22 +159,22 @@ TEST(KernelTest, ElapsedDelayBecomesReadyWithoutPreemptingTheRunningThread)
     const auto second = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "second", 0});
     kernel.start_thread(second, GuestAddress{0}, 0);
     kernel.delay_thread(50);
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     kernel.advance_time(49);
-    EXPECT_TRUE(kernel.select_next_thread());
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.thread_status(first).status.value(), 4U);
     kernel.advance_time(1);
-    EXPECT_TRUE(kernel.select_next_thread());
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.current_thread_id(), second);
     EXPECT_EQ(kernel.thread_status(first).status.value(), 2U);
     // Once ready, the thread is not added again on later CPU steps.
-    EXPECT_TRUE(kernel.select_next_thread());
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     kernel.exit_thread();
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.current_thread_id(), first);
     EXPECT_EQ(kernel.system_time(), 50U);
     kernel.exit_thread();
-    EXPECT_FALSE(kernel.select_next_thread());
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Finished);
 }
 
 TEST(KernelTest, ZeroDelayYieldsToReadyThreadsAndGameExitStopsPendingDelays)
@@ -183,17 +184,17 @@ TEST(KernelTest, ZeroDelayYieldsToReadyThreadsAndGameExitStopsPendingDelays)
     kernel.initialize(GuestAddress{0x400}, {});
     const auto first = kernel.current_thread_id();
     kernel.delay_thread(0);
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.current_thread_id(), first);
     EXPECT_EQ(kernel.system_time(), 0U);
     const auto second = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "second", 0});
     kernel.start_thread(second, GuestAddress{0}, 0);
     kernel.delay_thread(0);
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.current_thread_id(), second);
     kernel.delay_thread(1000);
     kernel.exit_game();
-    EXPECT_FALSE(kernel.select_next_thread());
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Finished);
     EXPECT_EQ(kernel.system_time(), 0U);
     EXPECT_EQ(kernel.exit_code(), 0);
 }
@@ -205,7 +206,7 @@ TEST(KernelTest, GuestClockAndDelayDeadlinesRemainWideAndRejectOverflow)
     kernel.initialize(GuestAddress{0x400}, {});
     kernel.advance_time(0xFFFFFFFEULL);
     kernel.delay_thread(5);
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.system_time(), 0x100000003ULL);
     kernel.advance_time(std::numeric_limits<std::uint64_t>::max() - kernel.system_time() - 1);
     EXPECT_THROW(kernel.delay_thread(2), std::overflow_error);
@@ -213,7 +214,7 @@ TEST(KernelTest, GuestClockAndDelayDeadlinesRemainWideAndRejectOverflow)
     EXPECT_THROW(kernel.advance_time(2), std::overflow_error);
     EXPECT_EQ(kernel.system_time(), std::numeric_limits<std::uint64_t>::max() - 1);
     kernel.delay_thread(1);
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.system_time(), std::numeric_limits<std::uint64_t>::max());
 }
 
@@ -356,7 +357,7 @@ TEST(KernelTest, IdleTimeSchedulesInterruptsWithoutChangingWaitingThreadState)
     kernel.advance_time(16'684);
     EXPECT_FALSE(kernel.deliver_pending_interrupt()); // No running thread yet.
     EXPECT_TRUE(state.load_linked);
-    ASSERT_TRUE(kernel.select_next_thread()); // Clock jumps to the wakeup deadline.
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready); // Clock jumps to the wakeup deadline.
     EXPECT_EQ(kernel.system_time(), 50'000U);
     EXPECT_TRUE(kernel.deliver_pending_interrupt());
     EXPECT_FALSE(state.load_linked);
@@ -364,7 +365,7 @@ TEST(KernelTest, IdleTimeSchedulesInterruptsWithoutChangingWaitingThreadState)
     // The idle jump itself must also generate edges.
     state.load_linked = true;
     kernel.delay_thread(50'000);
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_TRUE(kernel.deliver_pending_interrupt());
     EXPECT_FALSE(state.load_linked);
 }
@@ -405,7 +406,7 @@ TEST(KernelTest, WrongMutexOwnerCannotChangeGuestWorkArea)
     const auto original = memory.read_bytes(GuestAddress{0x900}, 32);
     kernel.start_thread(other, GuestAddress{0}, 0);
     kernel.exit_thread();
-    ASSERT_TRUE(kernel.select_next_thread());
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     ASSERT_EQ(kernel.current_thread_id(), other);
     EXPECT_THROW(kernel.unlock_mutex(GuestAddress{0x900}, 1), std::runtime_error);
     EXPECT_EQ(memory.read_bytes(GuestAddress{0x900}, 32), original);
@@ -573,6 +574,34 @@ TEST(KernelTest, AllocationPreservesAddressesAtTheEndOfTheGuestAddressSpace)
     EXPECT_THROW(Kernel(memory, GuestAddress{0xFFFFFB00}, 1281, {}, GuestAddress{0}), std::invalid_argument);
     EXPECT_THROW(Kernel(memory, GuestAddress{0xFFFFFB00}, std::numeric_limits<std::size_t>::max(), {}, GuestAddress{0}),
                  std::invalid_argument);
+}
+
+TEST(KernelTest, IdleSelectionStopsAtVblankBeforeWakeupAndDefersInterruptDelivery)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    kernel.initialize(GuestAddress{0x400}, {});
+    auto &state = kernel.current_thread_state();
+    state.load_linked = true;
+    state.registers[2] = 0xDEADBEEF;
+    kernel.delay_thread(50'050);
+    EXPECT_EQ(kernel.next_vblank_time(), 16'684U);
+    EXPECT_EQ(kernel.select_next_thread(kernel.next_vblank_time()), ThreadSelection::Idle);
+    EXPECT_EQ(kernel.system_time(), 16'684U);
+    EXPECT_EQ(state.registers[2], 0xDEADBEEFU);
+    EXPECT_FALSE(kernel.deliver_pending_interrupt());
+    EXPECT_TRUE(state.load_linked);
+    EXPECT_EQ(kernel.select_next_thread(kernel.next_vblank_time()), ThreadSelection::Idle);
+    EXPECT_EQ(kernel.system_time(), 33'367U);
+    EXPECT_EQ(kernel.select_next_thread(kernel.next_vblank_time()), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.system_time(), 50'050U);
+    EXPECT_EQ(state.registers[2], 0U);
+    EXPECT_TRUE(kernel.deliver_pending_interrupt());
+    EXPECT_FALSE(state.load_linked);
+    EXPECT_EQ(kernel.next_vblank_time(), 66'734U);
+    EXPECT_THROW(kernel.select_next_thread(0), std::invalid_argument);
+    kernel.advance_time(std::numeric_limits<std::uint64_t>::max() - kernel.system_time());
+    EXPECT_THROW(kernel.next_vblank_time(), std::overflow_error);
 }
 
 } // namespace psp::detail

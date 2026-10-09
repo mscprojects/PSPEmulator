@@ -7,9 +7,9 @@
 namespace psp::detail
 {
 
-SyscallDispatcher::SyscallDispatcher(Memory &memory, Kernel &kernel, GuestIo &io,
+SyscallDispatcher::SyscallDispatcher(Memory &memory, Kernel &kernel, GuestIo &io, Display &display,
                                      std::span<const PrxImportLibrary> imports)
-    : memory_(memory), kernel_(kernel), io_(io)
+    : memory_(memory), kernel_(kernel), io_(io), display_(display)
 {
     std::uint32_t code = 1;
     for (const auto &library : imports)
@@ -46,6 +46,24 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
 {
     // PSP MIPS32 EABI integer arguments occupy a0-a7 (registers 4-11).
     const auto arg = [&](std::size_t index) { return state.registers.at(4 + index); };
+    if (binding.library == "sceGe_user" && binding.nid == 0xE47E40E4) // sceGeEdramGetAddr
+    {
+        return 0x04000000;
+    }
+    if (binding.library == "sceDisplay")
+    {
+        switch (binding.nid)
+        {
+        case 0x0E20F177: // sceDisplaySetMode
+            display_.set_mode(arg(0), arg(1), arg(2));
+            return 0;
+        case 0x289D82FE: // sceDisplaySetFrameBuf
+            display_.set_framebuffer({GuestAddress{arg(0)}, arg(1), arg(2)}, arg(3));
+            return 0;
+        default:
+            break;
+        }
+    }
     if (binding.library == "ThreadManForUser")
     {
         switch (binding.nid)

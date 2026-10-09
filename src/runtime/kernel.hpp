@@ -5,6 +5,7 @@
 #include "runtime/guest_structures.hpp"
 
 #include <deque>
+#include <limits>
 #include <map>
 #include <optional>
 #include <span>
@@ -46,6 +47,13 @@ struct SemaphoreCreation
     std::uint32_t initial_count;
     std::uint32_t maximum;
     GuestAddress options;
+};
+
+enum class ThreadSelection : std::uint8_t
+{
+    Ready,
+    Idle,
+    Finished,
 };
 
 // Owns threads, scheduling, synchronization, allocations, and kernel object IDs.
@@ -96,9 +104,10 @@ public:
     std::uint32_t create_thread(ThreadCreation creation);
     void start_thread(std::uint32_t id, GuestAddress arguments, std::uint32_t argument_size);
     // Wake elapsed delays, complete returning/exited threads, and select a ready
-    // thread. If all threads are waiting, advance time to the next wakeup. False
-    // means execution has ended; no thread switch occurs inside Cpu::step().
-    bool select_next_thread();
+    // thread. Idle advancement stops at the earlier of a wakeup and idle_deadline.
+    // Idle means delayed threads remain but the deadline was reached first.
+    // No thread switch occurs inside Cpu::step().
+    ThreadSelection select_next_thread(std::uint64_t idle_deadline = std::numeric_limits<std::uint64_t>::max());
     CpuState &current_thread_state();
     std::uint32_t current_thread_id() const;
     std::uint32_t current_thread_priority() const;
@@ -109,6 +118,8 @@ public:
     // deterministic rate rather than a cycle-accurate CPU clock.
     void advance_time(std::uint64_t microseconds);
     std::uint64_t system_time() const;
+    // First integer microsecond at or after the next LCD edge; throws at clock overflow.
+    std::uint64_t next_vblank_time() const;
     // Handle a pending periodic vblank interrupt at an instruction boundary.
     // The HLE handler preserves CPU state except for the Allegrex link bit.
     // Masked events coalesce and remain pending until interrupts are enabled.

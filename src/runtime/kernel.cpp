@@ -92,11 +92,15 @@ void Kernel::start_thread(std::uint32_t id, GuestAddress arguments, std::uint32_
     ready_.push_back(id);
 }
 
-bool Kernel::select_next_thread()
+ThreadSelection Kernel::select_next_thread(std::uint64_t idle_deadline)
 {
+    if (idle_deadline < system_time_)
+    {
+        throw std::invalid_argument("Idle deadline precedes guest time");
+    }
     if (exit_code_)
     {
-        return false;
+        return ThreadSelection::Finished;
     }
     auto &thread = threads_.at(current_thread_);
     if (thread.lifecycle == Lifecycle::Started && thread.state.program_counter == return_address_)
@@ -109,18 +113,22 @@ bool Kernel::select_next_thread()
     {
         if (ready_.empty() && !delayed_.empty())
         {
-            advance_time(delayed_.begin()->first - system_time_);
+            advance_time(std::min(delayed_.begin()->first, idle_deadline) - system_time_);
             wake_delayed_threads();
+        }
+        if (ready_.empty() && !delayed_.empty())
+        {
+            return ThreadSelection::Idle;
         }
         if (ready_.empty())
         {
             exit_code_ = std::bit_cast<std::int32_t>(thread.state.registers[2]);
-            return false;
+            return ThreadSelection::Finished;
         }
         current_thread_ = ready_.front();
         ready_.pop_front();
     }
-    return true;
+    return ThreadSelection::Ready;
 }
 
 CpuState &Kernel::current_thread_state()
@@ -174,6 +182,20 @@ void Kernel::advance_time(std::uint64_t microseconds)
 std::uint64_t Kernel::system_time() const
 {
     return system_time_;
+}
+
+std::uint64_t Kernel::next_vblank_time() const
+{
+    // Split at the exact 60-frame period to avoid drift and intermediate overflow.
+    const auto period = system_time_ / 1'001'000;
+    const auto edge = (system_time_ % 1'001'000) * 60 / 1'001'000 + 1;
+    const auto offset = (edge * 1'001'000 + 59) / 60;
+    const auto start = period * 1'001'000;
+    if (offset > std::numeric_limits<std::uint64_t>::max() - start)
+    {
+        throw std::overflow_error("Next vblank exceeds guest clock range");
+    }
+    return start + offset;
 }
 
 bool Kernel::deliver_pending_interrupt()

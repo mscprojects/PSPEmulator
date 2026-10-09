@@ -32,6 +32,9 @@ public:
     // The new range must fit the address space and not overlap any mapping.
     void map_alias(GuestAddress alias_base, GuestAddress region_base);
 
+    // Validate a complete range without copying its bytes. Empty ranges are valid.
+    void validate_range(GuestAddress address, std::size_t size) const;
+
     std::uint8_t read_u8(GuestAddress address) const;
     std::uint16_t read_u16(GuestAddress address) const;
     std::uint32_t read_u32(GuestAddress address) const;

@@ -12,16 +12,24 @@ class Runtime
 {
 public:
     Runtime(const ParsedPrx &prx, const ExecutionOptions &options);
-    ExecutionResult run();
+    ExecutionEvent advance();
+    std::uint64_t guest_time() const;
+    std::span<const std::uint8_t> pixels() const;
+    const ExecutionResult &result() const;
+    // Captured output is also available before termination or after frontend closure.
+    std::string_view output() const;
 
 private:
     LoadedPrx loaded_;
     Cpu cpu_;
     Kernel kernel_;
     GuestIo io_;
+    Display display_;
     SyscallDispatcher dispatcher_;
     std::uint64_t instruction_budget_;
     std::uint64_t instructions_{};
+    std::uint64_t next_vblank_{};
+    std::optional<ExecutionResult> result_;
 };
 
 } // namespace psp::detail

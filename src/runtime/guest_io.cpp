@@ -50,6 +50,11 @@ void GuestIo::device_control(const DeviceControl &request)
     }
 }
 
+std::string_view GuestIo::output() const
+{
+    return output_;
+}
+
 std::string GuestIo::take_output()
 {
     return std::move(output_);

@@ -4,11 +4,13 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace psp
 {
@@ -601,6 +603,146 @@ TEST(ExecutionTest, RejectsInvalidOptionsAndInsufficientRuntimeMemory)
     options.memory_size = 0x01800000;
     options.arguments = {std::string("bad\0argument", 12)};
     EXPECT_THROW(execute_prx(parsed, options), std::invalid_argument);
+}
+
+TEST(ExecutionTest, SdkScreenHelloWorldRendersExpectedPixelsAtDifferentAddresses)
+{
+    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/screen_hello_world.prx", std::ios::binary);
+    ASSERT_TRUE(input.is_open());
+    const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    const auto parsed = read_prx(payload);
+    // Independently established from the pinned SDK MSX font and seven-pixel
+    // character advance in scr_printf.c; never derived from emulator output.
+    constexpr std::array<std::string_view, 8> text{
+        "#...#..........##.....##..................#...#.................##........#...",
+        "#...#...........#......#..................#...#..................#........#...",
+        "#...#...###.....#......#.....###..........#...#...###...#.##.....#.....##.#...",
+        "#####..#...#....#......#....#...#.........#.#.#..#...#..##..#....#....#..##...",
+        "#...#..#####....#......#....#...#.........#.#.#..#...#..#........#....#...#...",
+        "#...#..#........#......#....#...#.........##.##..#...#..#........#....#..##...",
+        "#...#...###....###....###....###..........#...#...###...#.......###....##.#...",
+        "..............................................................................",
+    };
+    Payload expected(std::size_t{480} * 272 * 4);
+    for (std::size_t pixel = 0; pixel < std::size_t{480} * 272; ++pixel)
+    {
+        const auto row = pixel / 480;
+        const auto column = pixel % 480;
+        const std::uint8_t color = row < text.size() && column < text[row].size() && text[row][column] == '#' ? 255 : 0;
+        expected[pixel * 4] = color;
+        expected[pixel * 4 + 1] = color;
+        expected[pixel * 4 + 2] = color;
+        expected[pixel * 4 + 3] = 255;
+    }
+    for (const std::uint32_t base : {0x08800000U, 0x08900000U})
+    {
+        SCOPED_TRACE(base);
+        ExecutionOptions options;
+        options.load_address = GuestAddress{base};
+        options.max_instructions = 2'000'000;
+        Execution execution(parsed, options);
+        std::size_t frames = 0;
+        while (execution.advance() == ExecutionEvent::Vblank)
+        {
+            ++frames;
+        }
+        EXPECT_GT(frames, 0U);
+        EXPECT_EQ(execution.result().exit_code, 0);
+        EXPECT_EQ(execution.result().output, "");
+        EXPECT_LT(execution.result().instructions_executed, options.max_instructions);
+        EXPECT_EQ(Payload(execution.pixels().begin(), execution.pixels().end()), expected);
+        EXPECT_EQ(execute_prx(parsed, options).exit_code, 0);
+    }
+}
+
+TEST(ExecutionTest, IncrementalExecutionYieldsEveryIdleVblankAndPreservesDelayResultAndBudget)
+{
+    ServicePrxFixture program("ThreadManForUser", {0xCEADEB47});
+    program.argument(0, 70'000);
+    program.call(0);
+    const auto parsed = program.finish();
+    ExecutionOptions options;
+    options.max_instructions = 10;
+    Execution execution(parsed, options);
+    EXPECT_THROW(execution.result(), std::logic_error);
+    for (const std::uint64_t time : {16'684, 33'367, 50'050, 66'734})
+    {
+        EXPECT_EQ(execution.advance(), ExecutionEvent::Vblank);
+        EXPECT_EQ(execution.guest_time(), time);
+    }
+    EXPECT_EQ(execution.advance(), ExecutionEvent::Finished);
+    EXPECT_EQ(execution.guest_time(), 70'010U);
+    EXPECT_EQ(execution.result().exit_code, 0);
+    EXPECT_EQ(execution.result().instructions_executed, 10U);
+    EXPECT_EQ(execution.result().output, "");
+    EXPECT_EQ(execution.advance(), ExecutionEvent::Finished);
+    EXPECT_EQ(execution.guest_time(), 70'010U);
+    const auto headless = execute_prx(parsed, options);
+    EXPECT_EQ(headless.instructions_executed, execution.result().instructions_executed);
+    EXPECT_EQ(headless.exit_code, execution.result().exit_code);
+}
+
+TEST(ExecutionTest, RunningGuestYieldsAtVblankWithMaskedInterruptsAndKeepsOverallBudget)
+{
+    ServicePrxFixture program("Kernel_Library", {0x092968F4});
+    program.call(0);                 // Mask interrupts before the loop.
+    program.instruction(0x1000FFFF); // Infinite branch with a nop delay slot.
+    program.instruction(0);
+    const auto parsed = read_prx(program.fixture.bytes);
+    ExecutionOptions options;
+    options.max_instructions = 50'050;
+    Execution execution(parsed, options);
+    for (const std::uint64_t time : {16'684, 33'367, 50'050})
+    {
+        EXPECT_EQ(execution.advance(), ExecutionEvent::Vblank);
+        EXPECT_EQ(execution.guest_time(), time);
+    }
+    EXPECT_THROW(execution.advance(), std::runtime_error);
+    EXPECT_EQ(execution.guest_time(), options.max_instructions);
+}
+
+TEST(ExecutionTest, TerminationBetweenVblanksCapturesActiveContentsWithoutActivatingPendingSelection)
+{
+    for (const unsigned sync : {0, 1})
+    {
+        ServicePrxFixture program("sceDisplay", {0x289D82FE});
+        program.argument(0, 0x44000000);
+        program.argument(1, 512);
+        program.argument(2, 3);
+        program.argument(3, sync);
+        program.call(0);
+        program.argument(0, 0x04000000);
+        program.argument(1, 0x00123456);
+        program.instruction(0xAC850000); // Write the first visible pixel.
+        const auto parsed = program.finish();
+        Execution execution(parsed);
+        EXPECT_EQ(execution.advance(), ExecutionEvent::Finished);
+        EXPECT_LT(execution.guest_time(), 16'684U);
+        EXPECT_EQ(execution.pixels()[0], sync == 0 ? 0x56 : 0);
+        EXPECT_EQ(execution.pixels()[1], sync == 0 ? 0x34 : 0);
+        EXPECT_EQ(execution.pixels()[2], sync == 0 ? 0x12 : 0);
+        EXPECT_EQ(execution.pixels()[3], 255);
+    }
+}
+
+TEST(ExecutionTest, CapturedConsoleOutputRemainsAvailableBeforeGuestTermination)
+{
+    ServicePrxFixture program("IoFileMgrForUser", {0x42EC03AC});
+    program.fixture.name(0x280, "hello");
+    program.argument(0, 1);
+    program.argument(1, 0x08800180);
+    program.argument(2, 5);
+    program.call(0);
+    program.instruction(0x1000FFFF); // Keep running after writing stdout.
+    program.instruction(0);
+    ExecutionOptions options;
+    options.max_instructions = 16'684;
+    Execution execution(read_prx(program.fixture.bytes), options);
+    EXPECT_EQ(execution.output(), "");
+    EXPECT_EQ(execution.advance(), ExecutionEvent::Vblank);
+    EXPECT_EQ(execution.output(), "hello");
+    EXPECT_THROW(execution.advance(), std::runtime_error);
+    EXPECT_EQ(execution.output(), "hello");
 }
 
 } // namespace psp

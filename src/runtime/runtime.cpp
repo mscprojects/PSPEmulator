@@ -10,7 +10,8 @@ namespace psp::detail
 Runtime::Runtime(const ParsedPrx &prx, const ExecutionOptions &options)
     : loaded_(prepare_prx(prx, options.load_address, options.memory_size)), cpu_(loaded_.memory),
       kernel_(loaded_.memory, options.load_address, options.memory_size, prx.segments, loaded_.module.global_pointer),
-      io_(loaded_.memory), dispatcher_(loaded_.memory, kernel_, io_, loaded_.imports),
+      io_(loaded_.memory), display_(loaded_.memory),
+      dispatcher_(loaded_.memory, kernel_, io_, display_, loaded_.imports),
       instruction_budget_(options.max_instructions)
 {
     if (instruction_budget_ == 0)
@@ -18,12 +19,39 @@ Runtime::Runtime(const ParsedPrx &prx, const ExecutionOptions &options)
         throw std::invalid_argument("Instruction budget must be positive");
     }
     kernel_.initialize(loaded_.entry_point, options.arguments);
+    next_vblank_ = kernel_.next_vblank_time();
 }
 
-ExecutionResult Runtime::run()
+ExecutionEvent Runtime::advance()
 {
-    while (kernel_.select_next_thread())
+    if (result_)
     {
+        return ExecutionEvent::Finished;
+    }
+    for (;;)
+    {
+        if (kernel_.system_time() == next_vblank_)
+        {
+            display_.vblank();
+            next_vblank_ = kernel_.next_vblank_time();
+            return ExecutionEvent::Vblank;
+        }
+        const auto selection = kernel_.select_next_thread(next_vblank_);
+        if (selection == ThreadSelection::Idle)
+        {
+            continue;
+        }
+        if (selection == ThreadSelection::Finished)
+        {
+            display_.capture();
+            result_ = ExecutionResult{io_.take_output(), kernel_.exit_code(), instructions_};
+            return ExecutionEvent::Finished;
+        }
+        // Selection can advance an idle clock exactly to a vblank/wakeup tie.
+        if (kernel_.system_time() == next_vblank_)
+        {
+            continue;
+        }
         auto &state = kernel_.current_thread_state();
         const auto pc = state.program_counter;
         try
@@ -56,7 +84,30 @@ ExecutionResult Runtime::run()
             throw std::runtime_error(context + ": " + error.what());
         }
     }
-    return {io_.take_output(), kernel_.exit_code(), instructions_};
+}
+
+std::uint64_t Runtime::guest_time() const
+{
+    return kernel_.system_time();
+}
+
+std::span<const std::uint8_t> Runtime::pixels() const
+{
+    return display_.pixels();
+}
+
+const ExecutionResult &Runtime::result() const
+{
+    if (!result_)
+    {
+        throw std::logic_error("Execution has not finished");
+    }
+    return *result_;
+}
+
+std::string_view Runtime::output() const
+{
+    return result_ ? std::string_view{result_->output} : io_.output();
 }
 
 } // namespace psp::detail

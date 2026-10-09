@@ -2,6 +2,7 @@
 
 #include "cpu/cpu.hpp"
 #include "loader/prx.hpp"
+#include "runtime/display.hpp"
 #include "runtime/guest_io.hpp"
 #include "runtime/kernel.hpp"
 
@@ -23,7 +24,8 @@ class SyscallDispatcher
     };
 
 public:
-    SyscallDispatcher(Memory &memory, Kernel &kernel, GuestIo &io, std::span<const PrxImportLibrary> imports);
+    SyscallDispatcher(Memory &memory, Kernel &kernel, GuestIo &io, Display &display,
+                      std::span<const PrxImportLibrary> imports);
     // A delayed service leaves v0 untouched until Kernel wakes the thread.
     void handle(const Syscall &syscall, CpuState &state);
 
@@ -33,6 +35,7 @@ private:
     Memory &memory_;
     Kernel &kernel_;
     GuestIo &io_;
+    Display &display_;
     std::vector<ImportBinding> imports_;
 };
 

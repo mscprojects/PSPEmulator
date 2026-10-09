@@ -5,9 +5,45 @@
 namespace psp
 {
 
+Execution::Execution(const ParsedPrx &prx, const ExecutionOptions &options)
+    : runtime_(std::make_unique<detail::Runtime>(prx, options))
+{
+}
+
+Execution::~Execution() = default;
+
+ExecutionEvent Execution::advance()
+{
+    return runtime_->advance();
+}
+
+std::uint64_t Execution::guest_time() const
+{
+    return runtime_->guest_time();
+}
+
+std::span<const std::uint8_t> Execution::pixels() const
+{
+    return runtime_->pixels();
+}
+
+const ExecutionResult &Execution::result() const
+{
+    return runtime_->result();
+}
+
+std::string_view Execution::output() const
+{
+    return runtime_->output();
+}
+
 ExecutionResult execute_prx(const ParsedPrx &prx, const ExecutionOptions &options)
 {
-    return detail::Runtime(prx, options).run();
+    Execution execution(prx, options);
+    while (execution.advance() != ExecutionEvent::Finished)
+    {
+    }
+    return execution.result();
 }
 
 } // namespace psp

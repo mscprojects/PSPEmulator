@@ -70,7 +70,7 @@ homebrew: setup-pspdev
     set -euo pipefail
     export PSPDEV="{{pspdev_directory}}"
     export PATH="$PSPDEV/bin:$PATH"
-    for sample in template/prx_template controller/basic; do
+    for sample in template/prx_template template/elf_template controller/basic; do
         source="third_party/pspsdk/src/samples/$sample"
         output="build-homebrew/$sample"
         mkdir -p "$output"

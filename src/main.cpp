@@ -1,3 +1,4 @@
+#include "frontend/window.hpp"
 #include "loader/prx_reader.hpp"
 #include "runtime/execution.hpp"
 
@@ -15,23 +16,36 @@ int main(int argc, char *argv[])
 {
     try
     {
-        if (argc != 2 && argc != 4)
+        constexpr auto usage = "Usage: pspemu program.prx [--window] [--max-instructions count]";
+        if (argc < 2)
         {
-            throw std::invalid_argument("Usage: pspemu program.prx [--max-instructions count]");
+            throw std::invalid_argument(usage);
         }
         psp::ExecutionOptions options;
         options.arguments = {argv[1]};
-        if (argc == 4)
+        bool window = false;
+        bool budget_supplied = false;
+        for (int index = 2; index < argc; ++index)
         {
-            if (std::string_view(argv[2]) != "--max-instructions")
+            const std::string_view option(argv[index]);
+            if (option == "--window" && !window)
             {
-                throw std::invalid_argument("Expected --max-instructions");
+                window = true;
             }
-            const std::string_view value(argv[3]);
-            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), options.max_instructions);
-            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size())
+            else if (option == "--max-instructions" && !budget_supplied && index + 1 < argc)
             {
-                throw std::invalid_argument("Invalid instruction budget");
+                budget_supplied = true;
+                const std::string_view value(argv[++index]);
+                const auto parsed =
+                    std::from_chars(value.data(), value.data() + value.size(), options.max_instructions);
+                if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size())
+                {
+                    throw std::invalid_argument("Invalid instruction budget");
+                }
+            }
+            else
+            {
+                throw std::invalid_argument(usage);
             }
         }
         std::ifstream input(argv[1], std::ios::binary);
@@ -40,7 +54,16 @@ int main(int argc, char *argv[])
             throw std::runtime_error("Cannot open PRX file");
         }
         const psp::Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
-        const auto result = psp::execute_prx(psp::read_prx(payload), options);
+        const auto prx = psp::read_prx(payload);
+        if (window)
+        {
+            psp::Execution execution(prx, options);
+            psp::frontend::Window display;
+            const auto exit_code = psp::frontend::run_windowed(execution, display);
+            fmt::print("{}", execution.output());
+            return exit_code;
+        }
+        const auto result = psp::execute_prx(prx, options);
         fmt::print("{}", result.output);
         return result.exit_code;
     }

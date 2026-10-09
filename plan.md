@@ -1,6 +1,6 @@
 # SDL display implementation plan
 
-Status: paused at the user's request on 2026-10-08. Implementation is authorized for the scope below; resume when the user asks. Only repository inspection has happened for this feature. No implementation files have changed.
+Status: complete on 2026-10-09. All four milestones are implemented and verified.
 
 ## REQ
 
@@ -43,10 +43,10 @@ The frontend processes events, runs to the next guest display event, uploads cap
 
 ## Milestones and verification
 
-1. Add display state and service dispatch. Test framebuffer validation, stride handling, color byte order, opacity, address aliases, and activation at vblank.
-2. Add execution that yields at vblank. Test running guests, idle periods spanning several vblanks, termination between display events, masked interrupts, and preservation of existing execution results and instruction limits.
-3. Build the unmodified SDK screen sample using the pinned PSPDEV setup, add its PRX through Git LFS, and extend the homebrew recipe and fixture documentation. Execute it at two load addresses and verify successful termination and rendered text against an independently established pixel expectation.
-4. Add the SDL frontend and CLI option. Verify the actual rendered window, final-frame retention, resizing, Escape/close handling, and closure during active execution. Use an isolated offscreen or virtual-display smoke check where practical. Run `just ci` for formatting, clang-tidy, Debug/Release tests, and address/undefined-behavior sanitizers. Verify the staged LFS pointer and object integrity before committing the completed feature.
+1. [x] Add display state and service dispatch. Test framebuffer validation, stride handling, color byte order, opacity, address aliases, and activation at vblank.
+2. [x] Add execution that yields at vblank. Test running guests, idle periods spanning several vblanks, termination between display events, masked interrupts, and preservation of existing execution results and instruction limits.
+3. [x] Build the unmodified SDK screen sample using the pinned PSPDEV setup, add its PRX through Git LFS, and extend the homebrew recipe and fixture documentation. Execute it at two load addresses and verify successful termination and rendered text against an independently established pixel expectation.
+4. [x] Add the SDL frontend and CLI option. Verify the actual rendered window, final-frame retention, resizing, Escape/close handling, and closure during active execution. Use an isolated offscreen or virtual-display smoke check where practical. Run `just ci` for formatting, clang-tidy, Debug/Release tests, and address/undefined-behavior sanitizers. Verify the staged LFS pointer and object integrity before committing the completed feature.
 
 ## Resume context
 
@@ -56,3 +56,10 @@ The frontend processes events, runs to the next guest display event, uploads cap
 - Relevant implementation files are `src/runtime/runtime.*`, `kernel.*`, `syscall_dispatcher.*`, `execution.*`, `src/main.cpp`, `CMakeLists.txt`, and `justfile`.
 - `.gitattributes` already tracks `*.prx` with Git LFS. The existing fixture notices cover the same pinned SDK, Newlib, and GCC runtime revisions.
 - No blocking scope decisions remain. Resolve routine interface choices during implementation without broadening this milestone.
+
+## Completion and verification
+
+- `just ci` passed formatting and clang-tidy, with all 171 tests passing in each Debug, Release, and address/undefined-behavior sanitizer configuration. Leak detection remains enabled; isolated SDL tests use offscreen video, software rendering, and CPU framebuffer surfaces.
+- The unmodified screen sample executes at both load addresses and matches the independently established full-frame MSX-font expectation. Its compiled PRX, pinned provenance, license notices, and rebuild instructions are included.
+- Actual CLI windows were checked on the desktop for rendered text, resizing, final-frame retention, window close, Escape, console output, and exit status. Offscreen tests also verify closure during active execution. CLI checks cover both option orders, invalid arguments, headless output, and windowed fault context.
+- The staged LFS pointer and stored object match SHA-256 `9458a58f4fec26f497670d901b5289e08a1cd962f3e73ad3daabda9bcdef7f0c` and size 158598 bytes; Git LFS integrity checks passed.

@@ -3,6 +3,7 @@
 #include "memory/memory.hpp"
 
 #include <string>
+#include <string_view>
 
 namespace psp::detail
 {
@@ -25,6 +26,7 @@ public:
     explicit GuestIo(Memory &memory);
     std::uint32_t write(std::uint32_t descriptor, GuestAddress buffer, std::uint32_t size);
     void device_control(const DeviceControl &request);
+    std::string_view output() const;
     std::string take_output();
 
 private:
