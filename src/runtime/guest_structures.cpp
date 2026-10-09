@@ -37,4 +37,9 @@ void write_mutex_work_area(Memory &memory, GuestAddress address, const GuestMute
     memory.write_bytes(address, std::bit_cast<std::array<std::uint8_t, sizeof(work_area)>>(work_area));
 }
 
+void write_controller_data(Memory &memory, GuestAddress address, const GuestControllerData &data)
+{
+    memory.write_bytes(address, std::bit_cast<std::array<std::uint8_t, sizeof(data)>>(data));
+}
+
 } // namespace psp::detail

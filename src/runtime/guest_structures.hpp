@@ -65,6 +65,18 @@ struct GuestMutexWorkArea
     std::array<GuestWord, 3> padding{};
 };
 
+// SceCtrlData from PSPSDK's pspctrl.h, including the optional second stick.
+struct GuestControllerData
+{
+    GuestWord timestamp;
+    GuestWord buttons;
+    std::uint8_t left_x{128};
+    std::uint8_t left_y{128};
+    std::uint8_t right_x{128};
+    std::uint8_t right_y{128};
+    std::array<std::uint8_t, 4> reserved{};
+};
+
 static_assert(sizeof(GuestWord) == 4);
 static_assert(sizeof(GuestThreadInfo) == 104);
 static_assert(offsetof(GuestThreadInfo, stack) == 48);
@@ -74,10 +86,14 @@ static_assert(sizeof(GuestMutexWorkArea) == 32);
 static_assert(offsetof(GuestMutexWorkArea, id) == 16);
 static_assert(std::is_trivially_copyable_v<GuestThreadInfo>);
 static_assert(std::is_trivially_copyable_v<GuestMutexWorkArea>);
+static_assert(sizeof(GuestControllerData) == 16);
+static_assert(offsetof(GuestControllerData, left_x) == 8);
+static_assert(std::is_trivially_copyable_v<GuestControllerData>);
 
 // Writes validate the entire output range before copying any bytes.
 void write_thread_info(Memory &memory, GuestAddress address, const GuestThreadInfo &info);
 GuestMutexWorkArea read_mutex_work_area(const Memory &memory, GuestAddress address);
 void write_mutex_work_area(Memory &memory, GuestAddress address, const GuestMutexWorkArea &work_area);
+void write_controller_data(Memory &memory, GuestAddress address, const GuestControllerData &data);
 
 } // namespace psp::detail

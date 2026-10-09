@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace psp::frontend
 {
@@ -95,12 +96,65 @@ bool Window::wait_until(std::chrono::steady_clock::time_point deadline)
     return false;
 }
 
+ControllerState Window::controller() const
+{
+    constexpr std::array bindings{
+        std::pair{SDL_SCANCODE_BACKSPACE, 0x1U}, std::pair{SDL_SCANCODE_RETURN, 0x8U},
+        std::pair{SDL_SCANCODE_UP, 0x10U},       std::pair{SDL_SCANCODE_RIGHT, 0x20U},
+        std::pair{SDL_SCANCODE_DOWN, 0x40U},     std::pair{SDL_SCANCODE_LEFT, 0x80U},
+        std::pair{SDL_SCANCODE_Q, 0x100U},       std::pair{SDL_SCANCODE_E, 0x200U},
+        std::pair{SDL_SCANCODE_I, 0x1000U},      std::pair{SDL_SCANCODE_L, 0x2000U},
+        std::pair{SDL_SCANCODE_K, 0x4000U},      std::pair{SDL_SCANCODE_J, 0x8000U},
+    };
+    ControllerState input;
+    for (const auto &[key, button] : bindings)
+    {
+        if (pressed_.at(key))
+        {
+            input.buttons |= button;
+        }
+    }
+    const auto axis = [&](SDL_Scancode negative, SDL_Scancode positive) -> std::uint8_t
+    {
+        if (pressed_.at(negative) == pressed_.at(positive))
+        {
+            return 128;
+        }
+        return pressed_.at(negative) ? 0 : 255;
+    };
+    input.left_x = axis(SDL_SCANCODE_A, SDL_SCANCODE_D);
+    input.left_y = axis(SDL_SCANCODE_W, SDL_SCANCODE_S);
+    return input;
+}
+
+bool Window::take_exit_request()
+{
+    return std::exchange(exit_requested_, false);
+}
+
 void Window::handle(const SDL_Event &event)
 {
     if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED ||
         (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE))
     {
         open_ = false;
+    }
+    if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP)
+    {
+        const auto key = static_cast<std::size_t>(event.key.scancode);
+        if (key < pressed_.size())
+        {
+            pressed_[key] = event.type == SDL_EVENT_KEY_DOWN;
+        }
+        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+            (event.key.key == SDLK_HOME || event.key.scancode == SDL_SCANCODE_HOME))
+        {
+            exit_requested_ = true;
+        }
+    }
+    if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST)
+    {
+        pressed_.fill(false);
     }
     if (event.type == SDL_EVENT_WINDOW_EXPOSED || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
         event.type == SDL_EVENT_WINDOW_RESIZED)
@@ -130,6 +184,11 @@ int run_windowed(Execution &execution, Window &window)
         {
             window.wait_until(std::chrono::steady_clock::now() + std::chrono::seconds{1});
             continue;
+        }
+        execution.set_controller(window.controller());
+        if (window.take_exit_request())
+        {
+            execution.request_exit();
         }
         if (execution.advance() == ExecutionEvent::Finished)
         {

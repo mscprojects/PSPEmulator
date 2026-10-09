@@ -71,7 +71,7 @@ std::uint32_t Kernel::create_thread(ThreadCreation creation)
     state.registers[28] = global_pointer_.value_of();
     state.registers[31] = return_address_.value_of();
     const auto id = next_id_++;
-    threads_.emplace(id, Thread{std::move(creation), state, stack});
+    threads_.emplace(id, Thread{.creation = std::move(creation), .state = state, .stack = stack});
     return id;
 }
 
@@ -103,20 +103,43 @@ ThreadSelection Kernel::select_next_thread(std::uint64_t idle_deadline)
         return ThreadSelection::Finished;
     }
     auto &thread = threads_.at(current_thread_);
+    if (thread.lifecycle == Lifecycle::Started && thread.callback &&
+        thread.state.program_counter == GuestAddress{return_address_.value_of() + 4})
+    {
+        const auto callback_id = thread.callback->id;
+        const auto remove = thread.state.registers[2] != 0;
+        thread.state = thread.callback->state;
+        thread.state.load_linked = false;
+        thread.callback.reset();
+        thread.lifecycle = Lifecycle::Waiting;
+        thread.wait = Wait::SleepCallback;
+        if (remove)
+        {
+            callbacks_.erase(callback_id);
+            if (exit_callback_ == callback_id)
+            {
+                exit_callback_.reset();
+            }
+        }
+    }
     if (thread.lifecycle == Lifecycle::Started && thread.state.program_counter == return_address_)
     {
         thread.lifecycle = Lifecycle::Finished;
     }
     const bool select_ready = thread.lifecycle != Lifecycle::Started;
     wake_delayed_threads();
+    wake_callbacks();
     if (select_ready)
     {
-        if (ready_.empty() && !delayed_.empty())
+        if (ready_.empty() &&
+            std::ranges::any_of(threads_, [](const auto &item) { return item.second.lifecycle == Lifecycle::Waiting; }))
         {
-            advance_time(std::min(delayed_.begin()->first, idle_deadline) - system_time_);
+            const auto deadline = delayed_.empty() ? idle_deadline : std::min(delayed_.begin()->first, idle_deadline);
+            advance_time(deadline - system_time_);
             wake_delayed_threads();
         }
-        if (ready_.empty() && !delayed_.empty())
+        if (ready_.empty() &&
+            std::ranges::any_of(threads_, [](const auto &item) { return item.second.lifecycle == Lifecycle::Waiting; }))
         {
             return ThreadSelection::Idle;
         }
@@ -125,8 +148,22 @@ ThreadSelection Kernel::select_next_thread(std::uint64_t idle_deadline)
             exit_code_ = std::bit_cast<std::int32_t>(thread.state.registers[2]);
             return ThreadSelection::Finished;
         }
-        current_thread_ = ready_.front();
-        ready_.pop_front();
+    }
+    if (!ready_.empty())
+    {
+        const auto next =
+            std::ranges::min_element(ready_, {}, [&](std::uint32_t id) { return threads_.at(id).creation.priority; });
+        if (select_ready || threads_.at(*next).creation.priority < thread.creation.priority)
+        {
+            const auto id = *next;
+            ready_.erase(next);
+            if (!select_ready)
+            {
+                thread.state.load_linked = false;
+                ready_.push_back(current_thread_);
+            }
+            current_thread_ = id;
+        }
     }
     return ThreadSelection::Ready;
 }
@@ -159,6 +196,84 @@ void Kernel::delay_thread(std::uint32_t microseconds)
     }
     delayed_.emplace(system_time_ + microseconds, current_thread_);
     thread.lifecycle = Lifecycle::Waiting;
+    thread.wait = Wait::Delay;
+}
+
+void Kernel::wait_controller()
+{
+    auto &thread = threads_.at(current_thread_);
+    if (thread.lifecycle != Lifecycle::Started)
+    {
+        throw std::logic_error("Only a running thread can wait for a controller sample");
+    }
+    thread.lifecycle = Lifecycle::Waiting;
+    thread.wait = Wait::Controller;
+}
+
+void Kernel::wake_controller(std::uint32_t id)
+{
+    auto &thread = threads_.at(id);
+    if (thread.lifecycle != Lifecycle::Waiting || thread.wait != Wait::Controller)
+    {
+        throw std::logic_error("Thread is not waiting for a controller sample");
+    }
+    thread.state.registers[2] = 1;
+    thread.lifecycle = Lifecycle::Started;
+    thread.wait = Wait::None;
+    ready_.push_back(id);
+}
+
+std::uint32_t Kernel::create_callback(GuestAddress entry, GuestAddress common)
+{
+    if ((entry.value_of() & 3U) != 0 || entry.value_of() == 0)
+    {
+        throw std::runtime_error("Callback entry must be non-null and aligned");
+    }
+    memory_.validate_range(entry, 4);
+    const auto id = next_id_++;
+    callbacks_.emplace(id, Callback{current_thread_, entry, common});
+    return id;
+}
+
+void Kernel::register_exit_callback(std::uint32_t id)
+{
+    callbacks_.at(id);
+    exit_callback_ = id;
+    if (exit_requested_)
+    {
+        request_exit();
+    }
+}
+
+void Kernel::sleep_thread_callbacks()
+{
+    auto &thread = threads_.at(current_thread_);
+    if (thread.lifecycle != Lifecycle::Started)
+    {
+        throw std::logic_error("Only a running thread can sleep");
+    }
+    if (thread.callback)
+    {
+        throw std::runtime_error("Nested callback-enabled sleep is unsupported");
+    }
+    thread.lifecycle = Lifecycle::Waiting;
+    thread.wait = Wait::SleepCallback;
+}
+
+void Kernel::request_exit()
+{
+    if (!exit_callback_)
+    {
+        exit_requested_ = true;
+        return;
+    }
+    auto &callback = callbacks_.at(*exit_callback_);
+    if (callback.notifications == std::numeric_limits<std::uint32_t>::max())
+    {
+        throw std::overflow_error("Callback notification count overflow");
+    }
+    ++callback.notifications;
+    exit_requested_ = false;
 }
 
 void Kernel::advance_time(std::uint64_t microseconds)
@@ -272,7 +387,8 @@ GuestThreadInfo Kernel::thread_status(std::uint32_t id) const
     if (thread.lifecycle == Lifecycle::Waiting)
     {
         status = ThreadStatus::Waiting;
-        info.wait_type = 2; // PSP delay wait; no object ID.
+        // PSP sleep/delay wait types; controller waits use an event flag approximation.
+        info.wait_type = thread.wait == Wait::SleepCallback ? 1 : thread.wait == Wait::Delay ? 2 : 4;
     }
     info.status = static_cast<std::uint32_t>(status);
     info.entry = creation.entry.value_of();
@@ -504,8 +620,40 @@ void Kernel::wake_delayed_threads()
         auto &thread = threads_.at(id);
         thread.state.registers[2] = 0; // sceKernelDelayThread completed successfully.
         thread.lifecycle = Lifecycle::Started;
+        thread.wait = Wait::None;
         ready_.push_back(id);
         delayed_.erase(delayed_.begin());
+    }
+}
+
+void Kernel::wake_callbacks()
+{
+    for (auto &[id, callback] : callbacks_)
+    {
+        auto &thread = threads_.at(callback.owner);
+        if (callback.notifications == 0 || thread.lifecycle != Lifecycle::Waiting ||
+            thread.wait != Wait::SleepCallback || thread.callback)
+        {
+            continue;
+        }
+        const auto stack_pointer = thread.state.registers[29];
+        if (stack_pointer < thread.stack.value_of() + 16 ||
+            static_cast<std::uint64_t>(stack_pointer) >
+                static_cast<std::uint64_t>(thread.stack.value_of()) + thread.creation.stack_size)
+        {
+            throw std::runtime_error("Insufficient thread stack for callback entry");
+        }
+        thread.callback = CallbackContext{thread.state, id};
+        thread.state.program_counter = callback.entry;
+        thread.state.next_program_counter = GuestAddress{callback.entry.value_of() + 4};
+        thread.state.registers[4] = std::exchange(callback.notifications, 0);
+        thread.state.registers[5] = 0; // Exit notification argument.
+        thread.state.registers[6] = callback.common.value_of();
+        thread.state.registers[29] = (stack_pointer - 16) & ~15U;
+        thread.state.registers[31] = return_address_.value_of() + 4;
+        thread.state.load_linked = false;
+        thread.lifecycle = Lifecycle::Started;
+        ready_.push_back(callback.owner);
     }
 }
 

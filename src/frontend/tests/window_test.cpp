@@ -131,4 +131,86 @@ TEST(WindowTest, EscapeDuringActiveExecutionStopsBeforeTheInstructionBudget)
     EXPECT_THROW(execution.result(), std::logic_error);
 }
 
+TEST(WindowTest, KeyboardButtonsAnalogOppositesReleaseAndFocusLoss)
+{
+    Window window;
+    ASSERT_TRUE(window.poll());
+    const auto key = [&](SDL_Scancode scancode, bool down)
+    {
+        SDL_Event event{};
+        event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+        event.key.scancode = scancode;
+        ASSERT_TRUE(SDL_PushEvent(&event));
+        ASSERT_TRUE(window.poll());
+    };
+    EXPECT_EQ(window.controller(), ControllerState{});
+    constexpr std::array buttons{SDL_SCANCODE_BACKSPACE, SDL_SCANCODE_RETURN, SDL_SCANCODE_UP, SDL_SCANCODE_RIGHT,
+                                 SDL_SCANCODE_DOWN,      SDL_SCANCODE_LEFT,   SDL_SCANCODE_Q,  SDL_SCANCODE_E,
+                                 SDL_SCANCODE_I,         SDL_SCANCODE_L,      SDL_SCANCODE_K,  SDL_SCANCODE_J};
+    constexpr std::array masks{0x1U,   0x8U,   0x10U,   0x20U,   0x40U,   0x80U,
+                               0x100U, 0x200U, 0x1000U, 0x2000U, 0x4000U, 0x8000U};
+    for (std::size_t index = 0; index < buttons.size(); ++index)
+    {
+        key(buttons[index], true);
+        EXPECT_EQ(window.controller().buttons, masks[index]);
+        key(buttons[index], false);
+        EXPECT_EQ(window.controller().buttons, 0U);
+    }
+    key(SDL_SCANCODE_UP, true);
+    key(SDL_SCANCODE_K, true);
+    key(SDL_SCANCODE_W, true);
+    key(SDL_SCANCODE_D, true);
+    EXPECT_EQ(window.controller(), (ControllerState{0x4010, 255, 0}));
+    key(SDL_SCANCODE_A, true);
+    key(SDL_SCANCODE_S, true);
+    EXPECT_EQ(window.controller(), (ControllerState{0x4010, 128, 128}));
+    key(SDL_SCANCODE_D, false);
+    key(SDL_SCANCODE_W, false);
+    EXPECT_EQ(window.controller(), (ControllerState{0x4010, 0, 255}));
+    SDL_Event event{};
+    event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+    ASSERT_TRUE(SDL_PushEvent(&event));
+    ASSERT_TRUE(window.poll());
+    EXPECT_EQ(window.controller(), ControllerState{});
+}
+
+TEST(WindowTest, HomeQueuesOneGuestExitRequestAndIgnoresKeyRepeat)
+{
+    Window window;
+    SDL_Event event{};
+    event.type = SDL_EVENT_KEY_DOWN;
+    event.key.key = SDLK_HOME;
+    ASSERT_TRUE(SDL_PushEvent(&event));
+    ASSERT_TRUE(window.poll());
+    EXPECT_TRUE(window.take_exit_request());
+    EXPECT_FALSE(window.take_exit_request());
+    event.key.repeat = true;
+    ASSERT_TRUE(SDL_PushEvent(&event));
+    ASSERT_TRUE(window.poll());
+    EXPECT_FALSE(window.take_exit_request());
+    EXPECT_EQ(window.controller(), ControllerState{});
+}
+
+TEST(WindowTest, ControllerSampleExitsThroughHomeAndRetainsWindowUntilEscape)
+{
+    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/controller_basic.prx", std::ios::binary);
+    ASSERT_TRUE(input.is_open());
+    const Payload bytes{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    ExecutionOptions options;
+    options.max_instructions = 2'000'000;
+    Execution execution(read_prx(bytes), options);
+    Window window;
+    SDL_Event event{};
+    event.type = SDL_EVENT_KEY_DOWN;
+    event.key.key = SDLK_HOME;
+    ASSERT_TRUE(SDL_PushEvent(&event));
+    // Escape is a delayed host close; Home must finish the guest before that close.
+    const auto timer = SDL_AddTimer(1500, close_after_delay, nullptr);
+    ASSERT_NE(timer, 0U);
+    EXPECT_EQ(run_windowed(execution, window), 0);
+    SDL_RemoveTimer(timer);
+    EXPECT_EQ(execution.result().exit_code, 0);
+    EXPECT_GE(execution.guest_time(), 16684U);
+}
+
 } // namespace psp::frontend

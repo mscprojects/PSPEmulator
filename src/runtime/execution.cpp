@@ -17,6 +17,16 @@ ExecutionEvent Execution::advance()
     return runtime_->advance();
 }
 
+void Execution::set_controller(ControllerState input)
+{
+    runtime_->set_controller(input);
+}
+
+void Execution::request_exit()
+{
+    runtime_->request_exit();
+}
+
 std::uint64_t Execution::guest_time() const
 {
     return runtime_->guest_time();

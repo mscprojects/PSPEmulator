@@ -1,6 +1,6 @@
 # SDL display implementation plan
 
-Status: complete on 2026-10-09. All four milestones are implemented and verified.
+Status: SDL display and controller input complete on 2026-10-09. Both milestones are implemented and verified.
 
 ## REQ
 
@@ -63,3 +63,16 @@ The frontend processes events, runs to the next guest display event, uploads cap
 - The unmodified screen sample executes at both load addresses and matches the independently established full-frame MSX-font expectation. Its compiled PRX, pinned provenance, license notices, and rebuild instructions are included.
 - Actual CLI windows were checked on the desktop for rendered text, resizing, final-frame retention, window close, Escape, console output, and exit status. Offscreen tests also verify closure during active execution. CLI checks cover both option orders, invalid arguments, headless output, and windowed fault context.
 - The staged LFS pointer and stored object match SHA-256 `9458a58f4fec26f497670d901b5289e08a1cd962f3e73ad3daabda9bcdef7f0c` and size 158598 bytes; Git LFS integrity checks passed.
+
+## Controller input milestone
+
+Run the unmodified SDK `controller/basic` sample with keyboard buttons and left analog input, deterministic vblank sampling, blocking positive reads, callback creation and exit registration, and callback-enabled sleep. Home requests a guest exit; Escape and window close stop the frontend. Preserve the sample's guest drawing and execute its callback through the CPU interpreter.
+
+- [x] Add SDL-independent input, cycle-0 sampling, digital/analog modes, and one-sample positive reads. Pending reads yield and resume at a guest sampling event.
+- [x] Add callback ownership, notification delivery, guest callback entry/return, and restoration of the sleeping owner. Select threads by PSP priority at instruction boundaries so rendering cannot starve the higher-priority callback thread; keep FIFO ties and defer time slicing.
+- [x] Connect keyboard presses/releases, focus loss, and Home to incremental execution. Store the unmodified PRX in Git LFS and test neutral/changed analog values, all buttons, and guest callback exit at two load addresses.
+- [x] Verify the actual desktop window, run formatting/clang-tidy/Debug/Release/sanitizers, inspect LFS integrity, and commit the milestone.
+
+Current limits: sampling cycle 0, count-1 positive reads, and one latest unread sample. Other controller APIs and general callback notification/wakeup APIs remain unsupported. The keyboard frontend leaves the right stick neutral; the core API and fixture tests cover both sticks. Runtime and keyboard contracts are documented in `docs/runtime.md` and `README.md`.
+
+Controller verification: `just ci` passed formatting and clang-tidy, with all 185 tests passing in Debug, Release, and address/undefined-behavior sanitizer builds. A desktop SDL window was checked for changed analog coordinates, button text, release to neutral, Home callback exit, final-frame retention after further input, and Escape closure. The PRX rebuilt identically from the unmodified pinned source. Its staged LFS pointer and stored object match SHA-256 `c4f5c88809321de3b545d48fc7598b0e5c7fe115cc7c609372b98137d35ae165` and size 160230 bytes; LFS integrity checks passed.

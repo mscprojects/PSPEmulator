@@ -2,6 +2,7 @@
 
 #include "loader/prx_reader.hpp"
 #include "memory/address.hpp"
+#include "runtime/controller_state.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -53,6 +54,10 @@ public:
     Execution &operator=(const Execution &) = delete;
 
     ExecutionEvent advance();
+    // Host state is sampled only at a future guest vblank, never on host time.
+    void set_controller(ControllerState input);
+    // Notify the registered guest exit callback; does not force termination.
+    void request_exit();
     std::uint64_t guest_time() const;
     // Packed 480x272 RGBA bytes, captured before returning from advance().
     // At termination only the active framebuffer is captured, not a pending selection.
@@ -67,7 +72,7 @@ private:
 };
 
 // Execute from the PRX entry point with an initialized stack, GP, and argument block.
-// Captures console output without accessing host files. Uses a minimal cooperative
+// Captures console output without accessing host files. Uses a minimal
 // PSP runtime, not a complete kernel. Uncalled imports may remain unsupported;
 // invoking one, a CPU fault, or budget exhaustion throws with guest PC context.
 ExecutionResult execute_prx(const ParsedPrx &prx, const ExecutionOptions &options = {});

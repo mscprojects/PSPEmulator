@@ -13,6 +13,8 @@ class Runtime
 public:
     Runtime(const ParsedPrx &prx, const ExecutionOptions &options);
     ExecutionEvent advance();
+    void set_controller(ControllerState input);
+    void request_exit();
     std::uint64_t guest_time() const;
     std::span<const std::uint8_t> pixels() const;
     const ExecutionResult &result() const;
@@ -25,6 +27,7 @@ private:
     Kernel kernel_;
     GuestIo io_;
     Display display_;
+    Controller controller_;
     SyscallDispatcher dispatcher_;
     std::uint64_t instruction_budget_;
     std::uint64_t instructions_{};

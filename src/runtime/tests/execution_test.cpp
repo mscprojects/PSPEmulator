@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <initializer_list>
@@ -74,6 +75,55 @@ public:
     test::PrxFixture fixture;
     std::size_t offset{0x400};
 };
+
+// Frozen glyph rows from the pinned SDK MSX font; independent of emulator output.
+Payload controller_text(std::span<const std::string_view> lines)
+{
+    constexpr std::string_view characters = " -012578=ACDLRSTUXYacdefghilnopqrstuvw";
+    constexpr std::array<std::array<std::uint8_t, 8>, 38> glyphs{{
+        {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, {0x00, 0x00, 0x00, 0x78, 0x00, 0x00, 0x00, 0x00},
+        {0x70, 0x88, 0x98, 0xA8, 0xC8, 0x88, 0x70, 0x00}, {0x20, 0x60, 0xA0, 0x20, 0x20, 0x20, 0xF8, 0x00},
+        {0x70, 0x88, 0x08, 0x10, 0x60, 0x80, 0xF8, 0x00}, {0xF8, 0x80, 0xE0, 0x10, 0x08, 0x10, 0xE0, 0x00},
+        {0xF8, 0x88, 0x10, 0x20, 0x20, 0x20, 0x20, 0x00}, {0x70, 0x88, 0x88, 0x70, 0x88, 0x88, 0x70, 0x00},
+        {0x00, 0x00, 0xF8, 0x00, 0xF8, 0x00, 0x00, 0x00}, {0x20, 0x50, 0x88, 0x88, 0xF8, 0x88, 0x88, 0x00},
+        {0x30, 0x48, 0x80, 0x80, 0x80, 0x48, 0x30, 0x00}, {0xE0, 0x50, 0x48, 0x48, 0x48, 0x50, 0xE0, 0x00},
+        {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0xF8, 0x00}, {0xF0, 0x88, 0x88, 0xF0, 0xA0, 0x90, 0x88, 0x00},
+        {0x70, 0x88, 0x80, 0x70, 0x08, 0x88, 0x70, 0x00}, {0xF8, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x00},
+        {0x88, 0x88, 0x88, 0x88, 0x88, 0x88, 0x70, 0x00}, {0x88, 0x88, 0x50, 0x20, 0x50, 0x88, 0x88, 0x00},
+        {0x88, 0x88, 0x88, 0x70, 0x20, 0x20, 0x20, 0x00}, {0x00, 0x00, 0x70, 0x08, 0x78, 0x88, 0x78, 0x00},
+        {0x00, 0x00, 0x70, 0x88, 0x80, 0x88, 0x70, 0x00}, {0x08, 0x08, 0x68, 0x98, 0x88, 0x98, 0x68, 0x00},
+        {0x00, 0x00, 0x70, 0x88, 0xF8, 0x80, 0x70, 0x00}, {0x10, 0x28, 0x20, 0xF8, 0x20, 0x20, 0x20, 0x00},
+        {0x00, 0x00, 0x68, 0x98, 0x98, 0x68, 0x08, 0x70}, {0x80, 0x80, 0xF0, 0x88, 0x88, 0x88, 0x88, 0x00},
+        {0x20, 0x00, 0x60, 0x20, 0x20, 0x20, 0x70, 0x00}, {0x60, 0x20, 0x20, 0x20, 0x20, 0x20, 0x70, 0x00},
+        {0x00, 0x00, 0xB0, 0xC8, 0x88, 0x88, 0x88, 0x00}, {0x00, 0x00, 0x70, 0x88, 0x88, 0x88, 0x70, 0x00},
+        {0x00, 0x00, 0xB0, 0xC8, 0xC8, 0xB0, 0x80, 0x80}, {0x00, 0x00, 0x68, 0x98, 0x98, 0x68, 0x08, 0x08},
+        {0x00, 0x00, 0xB0, 0xC8, 0x80, 0x80, 0x80, 0x00}, {0x00, 0x00, 0x78, 0x80, 0xF0, 0x08, 0xF0, 0x00},
+        {0x40, 0x40, 0xF0, 0x40, 0x40, 0x48, 0x30, 0x00}, {0x00, 0x00, 0x90, 0x90, 0x90, 0x90, 0x68, 0x00},
+        {0x00, 0x00, 0x88, 0x88, 0x88, 0x50, 0x20, 0x00}, {0x00, 0x00, 0x88, 0xA8, 0xA8, 0xA8, 0x50, 0x00},
+    }};
+    Payload pixels(lines.size() * 8 * 480 * 4);
+    for (std::size_t pixel = 0; pixel < lines.size() * 8 * 480; ++pixel)
+    {
+        const auto row = pixel / 480;
+        const auto column = pixel % 480;
+        const auto line = lines[row / 8];
+        std::uint8_t color = 0;
+        if (column / 7 < line.size())
+        {
+            const auto index = characters.find(line[column / 7]);
+            if (index == std::string_view::npos)
+            {
+                throw std::logic_error("Missing controller test glyph");
+            }
+            color = (glyphs[index][row % 8] & (128U >> (column % 7))) != 0 ? 255 : 0;
+        }
+        pixels[pixel * 4] = color;
+        pixels[pixel * 4 + 1] = color;
+        pixels[pixel * 4 + 2] = color;
+        pixels[pixel * 4 + 3] = 255;
+    }
+    return pixels;
+}
 
 } // namespace
 
@@ -653,6 +703,104 @@ TEST(ExecutionTest, SdkScreenHelloWorldRendersExpectedPixelsAtDifferentAddresses
         EXPECT_EQ(Payload(execution.pixels().begin(), execution.pixels().end()), expected);
         EXPECT_EQ(execute_prx(parsed, options).exit_code, 0);
     }
+}
+
+TEST(ExecutionTest, SdkControllerShowsInputAndExitsThroughGuestCallbackAtDifferentAddresses)
+{
+    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/controller_basic.prx", std::ios::binary);
+    ASSERT_TRUE(input.is_open());
+    const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    const auto parsed = read_prx(payload);
+    constexpr std::array<std::string_view, 4> neutral{
+        "L Analog X = 128 ",
+        "L Analog Y = 128 ",
+        "R Analog X = 128 ",
+        "R Analog Y = 128 ",
+    };
+    constexpr std::array<std::string_view, 16> pressed{
+        "L Analog X =   0 ", "L Analog Y = 255 ", "R Analog X =  17 ",  "R Analog Y = 200 ",
+        "Square pressed ",   "Triangle pressed ", "Cicle pressed ",     "Cross pressed ",
+        "Up pressed ",       "Down pressed ",     "Left pressed ",      "Right pressed ",
+        "Start pressed ",    "Select pressed ",   "L-trigger pressed ", "R-trigger pressed ",
+    };
+    for (const std::uint32_t base : {0x08800000U, 0x08900000U})
+    {
+        SCOPED_TRACE(base);
+        ExecutionOptions options;
+        options.load_address = GuestAddress{base};
+        options.max_instructions = 3'000'000;
+        Execution execution(parsed, options);
+        const auto await_text = [&](std::span<const std::string_view> lines)
+        {
+            const auto expected = controller_text(lines);
+            for (unsigned frame = 0; frame < 90; ++frame)
+            {
+                if (execution.advance() == ExecutionEvent::Finished)
+                {
+                    return false;
+                }
+                const auto actual = execution.pixels().subspan(std::size_t{16} * 480 * 4, expected.size());
+                if (std::ranges::equal(actual, expected))
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+        ASSERT_TRUE(await_text(neutral));
+        execution.set_controller({0xF3F9, 0, 255, 17, 200});
+        ASSERT_TRUE(await_text(pressed));
+        execution.set_controller({});
+        ASSERT_TRUE(await_text(neutral));
+        // Only guest exit_callback writes the sample's done variable. A notification
+        // must execute that code and allow main to call sceKernelExitGame itself.
+        execution.request_exit();
+        auto event = ExecutionEvent::Vblank;
+        for (unsigned frame = 0; frame < 90 && event != ExecutionEvent::Finished; ++frame)
+        {
+            event = execution.advance();
+        }
+        ASSERT_EQ(event, ExecutionEvent::Finished);
+        EXPECT_EQ(execution.result().exit_code, 0);
+        EXPECT_EQ(execution.result().output, "");
+        EXPECT_LT(execution.result().instructions_executed, options.max_instructions);
+        execution.request_exit();
+        EXPECT_EQ(execution.advance(), ExecutionEvent::Finished);
+    }
+}
+
+TEST(ExecutionTest, SdkControllerAcceptsExitRequestBeforeCallbackRegistration)
+{
+    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/controller_basic.prx", std::ios::binary);
+    ASSERT_TRUE(input.is_open());
+    const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    ExecutionOptions options;
+    options.max_instructions = 2'000'000;
+    Execution execution(read_prx(payload), options);
+    execution.request_exit();
+    auto event = ExecutionEvent::Vblank;
+    for (unsigned frame = 0; frame < 90 && event != ExecutionEvent::Finished; ++frame)
+    {
+        event = execution.advance();
+    }
+    ASSERT_EQ(event, ExecutionEvent::Finished);
+    EXPECT_EQ(execution.result().exit_code, 0);
+}
+
+TEST(ExecutionTest, ControllerReadImportResumesWithCountAndGuestButtonData)
+{
+    ServicePrxFixture program("sceCtrl", {0x1F803938});
+    program.argument(0, 0x08800180);
+    program.argument(1, 1);
+    program.call(0);
+    program.instruction(0x8C830004); // lw $v1, 4($a0): buttons
+    program.instruction(0x00431021); // addu $v0, $v0, $v1: read count + buttons
+    Execution execution(program.finish());
+    execution.set_controller({0x4000});
+    EXPECT_EQ(execution.advance(), ExecutionEvent::Vblank);
+    EXPECT_EQ(execution.guest_time(), 16684U);
+    ASSERT_EQ(execution.advance(), ExecutionEvent::Finished);
+    EXPECT_EQ(execution.result().exit_code, 0x4001);
 }
 
 TEST(ExecutionTest, IncrementalExecutionYieldsEveryIdleVblankAndPreservesDelayResultAndBudget)

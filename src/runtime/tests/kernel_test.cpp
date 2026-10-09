@@ -94,7 +94,8 @@ TEST(KernelTest, DelaySyscallDefersItsResultAndPreservesCommittedReturnAddress)
     const std::array imports{PrxImportLibrary{
         .name = "ThreadManForUser", .version = 0, .attributes = 0, .functions = {{0xCEADEB47, GuestAddress{0x800}}}}};
     Display display(memory);
-    SyscallDispatcher dispatcher(memory, kernel, io, display, imports);
+    Controller controller(memory, kernel);
+    SyscallDispatcher dispatcher(memory, kernel, io, display, controller, imports);
     Cpu cpu(memory);
     auto &state = kernel.current_thread_state();
     state.registers[31] = 0x900;
@@ -150,13 +151,13 @@ TEST(KernelTest, IdleClockAdvancesToEarliestDeadlineAndPreservesEqualDeadlineOrd
     EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Finished);
 }
 
-TEST(KernelTest, ElapsedDelayBecomesReadyWithoutPreemptingTheRunningThread)
+TEST(KernelTest, ElapsedDelayDoesNotPreemptAnEqualPriorityRunningThread)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto first = kernel.current_thread_id();
-    const auto second = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "second", 0});
+    const auto second = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x20, "second", 0});
     kernel.start_thread(second, GuestAddress{0}, 0);
     kernel.delay_thread(50);
     ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
@@ -187,7 +188,7 @@ TEST(KernelTest, ZeroDelayYieldsToReadyThreadsAndGameExitStopsPendingDelays)
     ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.current_thread_id(), first);
     EXPECT_EQ(kernel.system_time(), 0U);
-    const auto second = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "second", 0});
+    const auto second = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x20, "second", 0});
     kernel.start_thread(second, GuestAddress{0}, 0);
     kernel.delay_thread(0);
     ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
@@ -602,6 +603,169 @@ TEST(KernelTest, IdleSelectionStopsAtVblankBeforeWakeupAndDefersInterruptDeliver
     EXPECT_THROW(kernel.select_next_thread(0), std::invalid_argument);
     kernel.advance_time(std::numeric_limits<std::uint64_t>::max() - kernel.system_time());
     EXPECT_THROW(kernel.next_vblank_time(), std::overflow_error);
+}
+
+TEST(KernelTest, HigherPriorityReadyThreadsPreemptAtBoundariesAndResumeSavedThreads)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    kernel.initialize(GuestAddress{0x400}, {});
+    const auto main = kernel.current_thread_id();
+    const auto low = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "low", 0});
+    const auto middle = kernel.create_thread({GuestAddress{0x900}, 0x1000, 0x18, "middle", 0});
+    const auto high = kernel.create_thread({GuestAddress{0xA00}, 0x1000, 0x10, "high", 0});
+    for (const auto id : {low, middle, high})
+    {
+        kernel.start_thread(id, GuestAddress{0}, 0);
+    }
+    kernel.current_thread_state().registers[16] = 99;
+    kernel.current_thread_state().load_linked = true;
+    auto main_state = kernel.current_thread_state();
+    main_state.load_linked = false;
+    EXPECT_EQ(kernel.current_thread_id(), main); // StartThread does not switch inside dispatch.
+    ASSERT_EQ(kernel.select_next_thread(100), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_id(), high);
+    kernel.delay_thread(50);
+    ASSERT_EQ(kernel.select_next_thread(100), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_id(), middle);
+    kernel.exit_thread();
+    ASSERT_EQ(kernel.select_next_thread(100), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_id(), main);
+    EXPECT_EQ(kernel.current_thread_state(), main_state);
+    kernel.delay_thread(100);
+    ASSERT_EQ(kernel.select_next_thread(100), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_id(), low);
+    kernel.advance_time(50);
+    ASSERT_EQ(kernel.select_next_thread(100), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_id(), high); // Expired delay preempts the lower-priority thread.
+    kernel.exit_thread();
+    ASSERT_EQ(kernel.select_next_thread(100), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_id(), low);
+    kernel.exit_thread();
+    ASSERT_EQ(kernel.select_next_thread(100), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.system_time(), 100U);
+    EXPECT_EQ(kernel.current_thread_id(), main);
+    kernel.exit_thread();
+    EXPECT_EQ(kernel.select_next_thread(100), ThreadSelection::Finished);
+}
+
+TEST(KernelTest, ExitCallbackRunsOnOwnerAndRestoresCpuStateWithoutEndingSleep)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0x100});
+    kernel.initialize(GuestAddress{0x400}, {});
+    const auto main = kernel.current_thread_id();
+    const auto owner = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x11, "callbacks", 0});
+    kernel.start_thread(owner, GuestAddress{0}, 0);
+    kernel.wait_controller();
+    ASSERT_EQ(kernel.select_next_thread(100), ThreadSelection::Ready);
+    ASSERT_EQ(kernel.current_thread_id(), owner);
+    const auto callback = kernel.create_callback(GuestAddress{0x900}, GuestAddress{0xC00});
+    kernel.register_exit_callback(callback);
+    auto &state = kernel.current_thread_state();
+    state.program_counter = GuestAddress{0xA00}; // Continuation of SleepThreadCB.
+    state.next_program_counter = GuestAddress{0xA04};
+    state.registers[2] = 0xDEADBEEF;
+    state.registers[16] = 44;
+    state.high_register = 33;
+    state.floating_point_registers[1] = 0x3F800000;
+    state.load_linked = true;
+    auto saved = state;
+    saved.load_linked = false;
+    kernel.sleep_thread_callbacks();
+    ASSERT_EQ(kernel.select_next_thread(100), ThreadSelection::Idle);
+    EXPECT_EQ(kernel.thread_status(owner).wait_type.value(), 1U);
+    kernel.request_exit();
+    kernel.request_exit();
+    ASSERT_EQ(kernel.select_next_thread(100), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_id(), owner);
+    EXPECT_EQ(state.registers[4], 2U);
+    EXPECT_EQ(state.registers[5], 0U);
+    EXPECT_EQ(state.registers[6], 0xC00U);
+    EXPECT_EQ(state.registers[28], 0x100U);
+    EXPECT_LT(state.registers[29], saved.registers[29]);
+    EXPECT_FALSE(state.load_linked);
+    // Guest instructions write the callback ABI arguments and clobber saved state.
+    constexpr std::array code{0xACC40000U, 0xACC50004U, 0xACC60008U, 0x00800011U, 0x24100063U,
+                              0x44840800U, 0x24020000U, 0x03E00008U, 0U};
+    for (std::size_t index = 0; index < code.size(); ++index)
+    {
+        memory.write_u32(GuestAddress{0x900 + static_cast<std::uint32_t>(index * 4)}, code[index]);
+    }
+    Cpu cpu(memory);
+    for (std::size_t index = 0; index < code.size(); ++index)
+    {
+        EXPECT_FALSE(cpu.step(state));
+        kernel.advance_time(1);
+    }
+    ASSERT_EQ(kernel.select_next_thread(200), ThreadSelection::Idle);
+    EXPECT_EQ(state, saved);
+    EXPECT_EQ(memory.read_u32(GuestAddress{0xC00}), 2U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{0xC04}), 0U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{0xC08}), 0xC00U);
+    EXPECT_EQ(kernel.thread_status(owner).status.value(), 4U);
+    kernel.wake_controller(main);
+    ASSERT_EQ(kernel.select_next_thread(200), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_id(), main);
+    kernel.current_thread_state().load_linked = true;
+    kernel.request_exit();
+    ASSERT_EQ(kernel.select_next_thread(200), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_id(), owner);
+    EXPECT_EQ(kernel.thread_status(main).status.value(), 2U);
+    EXPECT_EQ(state.registers[4], 1U); // A fresh notification after the first was consumed.
+    for (std::size_t index = 0; index < code.size(); ++index)
+    {
+        EXPECT_FALSE(cpu.step(state));
+    }
+    ASSERT_EQ(kernel.select_next_thread(200), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_id(), main);
+    EXPECT_FALSE(kernel.current_thread_state().load_linked);
+}
+
+TEST(KernelTest, EarlyExitRequestWaitsForCallbackEnabledSleepAndNonzeroReturnDeletesCallback)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    kernel.initialize(GuestAddress{0x400}, {});
+    kernel.request_exit();
+    const auto id = kernel.create_callback(GuestAddress{0x800}, GuestAddress{0});
+    kernel.register_exit_callback(id);
+    auto &state = kernel.current_thread_state();
+    const auto original = state;
+    EXPECT_EQ(kernel.select_next_thread(100), ThreadSelection::Ready);
+    EXPECT_EQ(state, original); // Registration does not invoke the function inline.
+    kernel.delay_thread(10);
+    EXPECT_EQ(kernel.select_next_thread(100), ThreadSelection::Ready);
+    EXPECT_EQ(state.program_counter, original.program_counter); // Ordinary delay is not callback-enabled.
+    kernel.sleep_thread_callbacks();
+    ASSERT_EQ(kernel.select_next_thread(100), ThreadSelection::Ready);
+    EXPECT_EQ(state.program_counter, GuestAddress{0x800});
+    EXPECT_EQ(state.registers[4], 1U);
+    EXPECT_THROW(kernel.sleep_thread_callbacks(), std::runtime_error);
+    state.registers[2] = 1;
+    state.program_counter = GuestAddress{state.registers[31]};
+    EXPECT_EQ(kernel.select_next_thread(100), ThreadSelection::Idle);
+    EXPECT_THROW(kernel.register_exit_callback(id), std::out_of_range);
+    EXPECT_EQ(kernel.thread_status(0).status.value(), 4U);
+}
+
+TEST(KernelTest, CallbackValidationRejectsInvalidEntriesIdsAndInsufficientStack)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    kernel.initialize(GuestAddress{0x400}, {});
+    EXPECT_THROW(kernel.create_callback(GuestAddress{0}, GuestAddress{0}), std::runtime_error);
+    EXPECT_THROW(kernel.create_callback(GuestAddress{0x801}, GuestAddress{0}), std::runtime_error);
+    EXPECT_THROW(kernel.create_callback(GuestAddress{0x40000}, GuestAddress{0}), std::out_of_range);
+    EXPECT_THROW(kernel.register_exit_callback(999), std::out_of_range);
+    const auto id = kernel.create_callback(GuestAddress{0x800}, GuestAddress{0});
+    kernel.register_exit_callback(id);
+    kernel.current_thread_state().registers[29] = kernel.thread_status(0).stack.value();
+    const auto saved = kernel.current_thread_state();
+    kernel.sleep_thread_callbacks();
+    kernel.request_exit();
+    EXPECT_THROW(kernel.select_next_thread(100), std::runtime_error);
+    EXPECT_EQ(kernel.current_thread_state(), saved);
 }
 
 } // namespace psp::detail

@@ -8,8 +8,8 @@ namespace psp::detail
 {
 
 SyscallDispatcher::SyscallDispatcher(Memory &memory, Kernel &kernel, GuestIo &io, Display &display,
-                                     std::span<const PrxImportLibrary> imports)
-    : memory_(memory), kernel_(kernel), io_(io), display_(display)
+                                     Controller &controller, std::span<const PrxImportLibrary> imports)
+    : memory_(memory), kernel_(kernel), io_(io), display_(display), controller_(controller)
 {
     std::uint32_t code = 1;
     for (const auto &library : imports)
@@ -68,6 +68,12 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
     {
         switch (binding.nid)
         {
+        case 0xE81CAF8F: // sceKernelCreateCallback
+            memory_.read_c_string(GuestAddress{arg(0)}, 32);
+            return kernel_.create_callback(GuestAddress{arg(1)}, GuestAddress{arg(2)});
+        case 0x82826F70: // sceKernelSleepThreadCB
+            kernel_.sleep_thread_callbacks();
+            return std::nullopt;
         case 0x446D8DE6: // sceKernelCreateThread
             return kernel_.create_thread({.entry = GuestAddress{arg(1)},
                                           .stack_size = arg(3),
@@ -219,10 +225,33 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
         memory_.write_u32(GuestAddress{arg(1)}, 0);
         return 0;
     }
-    if (binding.library == "LoadExecForUser" && binding.nid == 0x05572A5F) // sceKernelExitGame
+    if (binding.library == "sceCtrl")
     {
-        kernel_.exit_game();
-        return 0;
+        switch (binding.nid)
+        {
+        case 0x6A2774F3: // sceCtrlSetSamplingCycle
+            return controller_.set_sampling_cycle(arg(0));
+        case 0x1F4011E6: // sceCtrlSetSamplingMode
+            return controller_.set_sampling_mode(arg(0));
+        case 0x1F803938: // sceCtrlReadBufferPositive
+            return controller_.read_positive(GuestAddress{arg(0)}, arg(1));
+        default:
+            break;
+        }
+    }
+    if (binding.library == "LoadExecForUser")
+    {
+        switch (binding.nid)
+        {
+        case 0x05572A5F: // sceKernelExitGame
+            kernel_.exit_game();
+            return 0;
+        case 0x4AC57943: // sceKernelRegisterExitCallback
+            kernel_.register_exit_callback(arg(0));
+            return 0;
+        default:
+            break;
+        }
     }
     throw std::runtime_error(fmt::format("Unsupported import {}:0x{:x}", binding.library, binding.nid));
 }

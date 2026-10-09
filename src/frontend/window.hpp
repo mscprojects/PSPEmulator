@@ -4,6 +4,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <array>
 #include <chrono>
 #include <memory>
 
@@ -27,6 +28,8 @@ public:
     bool poll();
     // Keeps handling events and repainting while waiting on the monotonic host clock.
     bool wait_until(std::chrono::steady_clock::time_point deadline);
+    ControllerState controller() const;
+    bool take_exit_request();
 
 private:
     void handle(const SDL_Event &event);
@@ -38,6 +41,8 @@ private:
     std::unique_ptr<SDL_Texture, decltype(&SDL_DestroyTexture)> texture_;
     bool open_{true};
     bool redraw_{true};
+    std::array<bool, SDL_SCANCODE_COUNT> pressed_{};
+    bool exit_requested_{};
 };
 
 // Pace guest vblanks at 60000/1001 Hz; retain the final frame until close/Escape.

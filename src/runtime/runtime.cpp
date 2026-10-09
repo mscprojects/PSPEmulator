@@ -10,8 +10,8 @@ namespace psp::detail
 Runtime::Runtime(const ParsedPrx &prx, const ExecutionOptions &options)
     : loaded_(prepare_prx(prx, options.load_address, options.memory_size)), cpu_(loaded_.memory),
       kernel_(loaded_.memory, options.load_address, options.memory_size, prx.segments, loaded_.module.global_pointer),
-      io_(loaded_.memory), display_(loaded_.memory),
-      dispatcher_(loaded_.memory, kernel_, io_, display_, loaded_.imports),
+      io_(loaded_.memory), display_(loaded_.memory), controller_(loaded_.memory, kernel_),
+      dispatcher_(loaded_.memory, kernel_, io_, display_, controller_, loaded_.imports),
       instruction_budget_(options.max_instructions)
 {
     if (instruction_budget_ == 0)
@@ -33,6 +33,7 @@ ExecutionEvent Runtime::advance()
         if (kernel_.system_time() == next_vblank_)
         {
             display_.vblank();
+            controller_.vblank();
             next_vblank_ = kernel_.next_vblank_time();
             return ExecutionEvent::Vblank;
         }
@@ -83,6 +84,19 @@ ExecutionEvent Runtime::advance()
             }
             throw std::runtime_error(context + ": " + error.what());
         }
+    }
+}
+
+void Runtime::set_controller(ControllerState input)
+{
+    controller_.set_input(input);
+}
+
+void Runtime::request_exit()
+{
+    if (!result_)
+    {
+        kernel_.request_exit();
     }
 }
 

@@ -57,8 +57,9 @@ enum class ThreadSelection : std::uint8_t
 };
 
 // Owns threads, scheduling, synchronization, allocations, and kernel object IDs.
-// Delays use guest microseconds; synchronization waits, callbacks, and preemption
-// remain unsupported.
+// Delays use guest microseconds. Controller waits and callback-enabled sleep
+// are supported. Higher-priority ready threads preempt at instruction boundaries;
+// blocking synchronization and equal-priority time slicing remain unsupported.
 class Kernel
 {
     enum class AllocationDirection : std::uint8_t
@@ -75,12 +76,36 @@ class Kernel
         Finished,
     };
 
+    enum class Wait : std::uint8_t
+    {
+        None,
+        SleepCallback,
+        Delay,
+        Controller,
+    };
+
+    struct CallbackContext
+    {
+        CpuState state;
+        std::uint32_t id;
+    };
+
     struct Thread
     {
         ThreadCreation creation;
         CpuState state;
         GuestAddress stack;
         Lifecycle lifecycle{Lifecycle::Created};
+        Wait wait{Wait::None};
+        std::optional<CallbackContext> callback{};
+    };
+
+    struct Callback
+    {
+        std::uint32_t owner;
+        GuestAddress entry;
+        GuestAddress common;
+        std::uint32_t notifications{};
     };
 
     struct Semaphore
@@ -104,16 +129,25 @@ public:
     std::uint32_t create_thread(ThreadCreation creation);
     void start_thread(std::uint32_t id, GuestAddress arguments, std::uint32_t argument_size);
     // Wake elapsed delays, complete returning/exited threads, and select a ready
-    // thread. Idle advancement stops at the earlier of a wakeup and idle_deadline.
-    // Idle means delayed threads remain but the deadline was reached first.
+    // thread by priority, with FIFO ties. Higher-priority ready threads preempt.
+    // Idle advancement stops at the earlier of a wakeup and idle_deadline.
+    // Idle means waiting threads remain with no ready thread at the deadline.
     // No thread switch occurs inside Cpu::step().
     ThreadSelection select_next_thread(std::uint64_t idle_deadline = std::numeric_limits<std::uint64_t>::max());
     CpuState &current_thread_state();
     std::uint32_t current_thread_id() const;
     std::uint32_t current_thread_priority() const;
     // Delay the current thread; v0 is supplied when the delay expires. A zero
-    // delay yields to already-ready threads without advancing guest time.
+    // delay yields to ready threads of equal priority without advancing guest time.
     void delay_thread(std::uint32_t microseconds);
+    void wait_controller();
+    void wake_controller(std::uint32_t id);
+    std::uint32_t create_callback(GuestAddress entry, GuestAddress common);
+    void register_exit_callback(std::uint32_t id);
+    void sleep_thread_callbacks();
+    // Queue a notification; guest code runs only in its owner's callback-enabled sleep.
+    // An early request is retained until an exit callback is registered.
+    void request_exit();
     // Runtime currently advances one microsecond per instruction, a provisional
     // deterministic rate rather than a cycle-accurate CPU clock.
     void advance_time(std::uint64_t microseconds);
@@ -153,6 +187,7 @@ private:
     MemoryRange allocate_memory(std::uint32_t size, AllocationDirection direction);
     void place_arguments(Thread &thread, PayloadSpan arguments);
     void wake_delayed_threads();
+    void wake_callbacks();
     GuestMutexWorkArea mutex_work_area(GuestAddress address) const;
     void validate_mutex_count(const GuestMutexWorkArea &work_area, std::uint32_t count) const;
 
@@ -167,6 +202,9 @@ private:
     std::uint32_t current_thread_{};
     std::uint64_t system_time_{};
     std::multimap<std::uint64_t, std::uint32_t> delayed_;
+    std::map<std::uint32_t, Callback> callbacks_;
+    std::optional<std::uint32_t> exit_callback_;
+    bool exit_requested_{};
     bool interrupts_enabled_{true};
     bool interrupt_pending_{};
     std::optional<int> exit_code_;

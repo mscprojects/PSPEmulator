@@ -47,6 +47,7 @@ add_library(psp_core
     src/memory/memory.cpp
     src/loader/prx_reader.cpp
     src/loader/prx.cpp
+    src/runtime/controller.cpp
     src/runtime/display.cpp
     src/runtime/execution.cpp
     src/runtime/guest_io.cpp
@@ -80,6 +81,7 @@ if(BUILD_TESTING)
         src/loader/tests/prx_test.cpp
         src/loader/tests/prx_reader_test.cpp
         src/runtime/tests/display_test.cpp
+        src/runtime/tests/controller_test.cpp
         src/runtime/tests/execution_test.cpp
         src/runtime/tests/guest_structures_test.cpp
         src/runtime/tests/kernel_test.cpp
