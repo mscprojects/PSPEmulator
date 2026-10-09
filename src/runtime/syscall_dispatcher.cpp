@@ -8,8 +8,8 @@ namespace psp::detail
 {
 
 SyscallDispatcher::SyscallDispatcher(Memory &memory, Kernel &kernel, GuestIo &io, Display &display,
-                                     Controller &controller, std::span<const PrxImportLibrary> imports)
-    : memory_(memory), kernel_(kernel), io_(io), display_(display), controller_(controller)
+                                     Controller &controller, Ge &ge, std::span<const PrxImportLibrary> imports)
+    : memory_(memory), kernel_(kernel), io_(io), display_(display), controller_(controller), ge_(ge)
 {
     std::uint32_t code = 1;
     for (const auto &library : imports)
@@ -46,14 +46,37 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
 {
     // PSP MIPS32 EABI integer arguments occupy a0-a7 (registers 4-11).
     const auto arg = [&](std::size_t index) { return state.registers.at(4 + index); };
-    if (binding.library == "sceGe_user" && binding.nid == 0xE47E40E4) // sceGeEdramGetAddr
+    if (binding.library == "sceGe_user")
     {
-        return 0x04000000;
+        switch (binding.nid)
+        {
+        case 0xE47E40E4: // sceGeEdramGetAddr
+            return 0x04000000;
+        case 0xA4FC06A4: // sceGeSetCallback
+            return ge_.set_callback(GuestAddress{arg(0)});
+        case 0x05DB22CE: // sceGeUnsetCallback
+            ge_.unset_callback(arg(0));
+            return 0;
+        case 0xAB49E76A: // sceGeListEnQueue
+            return ge_.enqueue({GuestAddress{arg(0)}, GuestAddress{arg(1)}, arg(2), GuestAddress{arg(3)}});
+        case 0xE0D68148: // sceGeListUpdateStallAddr
+            ge_.update_stall(arg(0), GuestAddress{arg(1)});
+            return 0;
+        case 0x03444EB4: // sceGeListSync
+            return ge_.list_sync(arg(0), arg(1));
+        case 0xB287BD61: // sceGeDrawSync
+            return ge_.draw_sync(arg(0));
+        default:
+            break;
+        }
     }
     if (binding.library == "sceDisplay")
     {
         switch (binding.nid)
         {
+        case 0x984C27E7: // sceDisplayWaitVblankStart
+            kernel_.wait_vblank();
+            return std::nullopt;
         case 0x0E20F177: // sceDisplaySetMode
             display_.set_mode(arg(0), arg(1), arg(2));
             return 0;
@@ -68,6 +91,11 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
     {
         switch (binding.nid)
         {
+        case 0x55C20A00: // sceKernelCreateEventFlag
+            return kernel_.create_event_flag({GuestAddress{arg(0)}, arg(1), arg(2), GuestAddress{arg(3)}});
+        case 0xEF9E4C70: // sceKernelDeleteEventFlag
+            kernel_.delete_event_flag(arg(0));
+            return 0;
         case 0xE81CAF8F: // sceKernelCreateCallback
             memory_.read_c_string(GuestAddress{arg(0)}, 32);
             return kernel_.create_callback(GuestAddress{arg(1)}, GuestAddress{arg(2)});

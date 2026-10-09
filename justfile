@@ -78,5 +78,9 @@ homebrew: setup-pspdev
         cp -p "$source/Makefile.sample" "$output/Makefile"
         make -C "$output" --jobs "$(nproc)" BUILD_PRX=1 EXTRA_TARGETS=
     done
+    output="build-homebrew/triangle"
+    mkdir -p "$output"
+    cp -p homebrew/triangle/main.c homebrew/triangle/Makefile "$output/"
+    make -C "$output" --jobs "$(nproc)"
 
 ci: format-check test release-test tidy sanitizers

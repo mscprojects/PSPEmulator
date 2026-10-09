@@ -111,11 +111,11 @@ ThreadSelection Kernel::select_next_thread(std::uint64_t idle_deadline)
         thread.state = thread.callback->state;
         thread.state.load_linked = false;
         thread.callback.reset();
-        thread.lifecycle = Lifecycle::Waiting;
-        thread.wait = Wait::SleepCallback;
-        if (remove)
+        thread.lifecycle = callback_id ? Lifecycle::Waiting : Lifecycle::Started;
+        thread.wait = callback_id ? Wait::SleepCallback : Wait::None;
+        if (remove && callback_id)
         {
-            callbacks_.erase(callback_id);
+            callbacks_.erase(*callback_id);
             if (exit_callback_ == callback_id)
             {
                 exit_callback_.reset();
@@ -223,6 +223,36 @@ void Kernel::wake_controller(std::uint32_t id)
     ready_.push_back(id);
 }
 
+void Kernel::wait_ge()
+{
+    auto &thread = threads_.at(current_thread_);
+    if (thread.lifecycle != Lifecycle::Started)
+    {
+        throw std::logic_error("Only a running thread can wait for the GE");
+    }
+    thread.lifecycle = Lifecycle::Waiting;
+    thread.wait = Wait::Ge;
+}
+
+void Kernel::wake_ge(std::uint32_t id)
+{
+    auto &thread = threads_.at(id);
+    if (thread.lifecycle != Lifecycle::Waiting || thread.wait != Wait::Ge)
+    {
+        throw std::logic_error("Thread is not waiting for the GE");
+    }
+    thread.state.registers[2] = 0;
+    thread.lifecycle = Lifecycle::Started;
+    thread.wait = Wait::None;
+    ready_.push_back(id);
+}
+
+void Kernel::wait_vblank()
+{
+    delay_thread(static_cast<std::uint32_t>(next_vblank_time() - system_time_));
+    threads_.at(current_thread_).wait = Wait::Vblank;
+}
+
 std::uint32_t Kernel::create_callback(GuestAddress entry, GuestAddress common)
 {
     if ((entry.value_of() & 3U) != 0 || entry.value_of() == 0)
@@ -274,6 +304,21 @@ void Kernel::request_exit()
     }
     ++callback.notifications;
     exit_requested_ = false;
+}
+
+bool Kernel::enter_interrupt_callback(GuestAddress entry, std::uint32_t argument, GuestAddress common)
+{
+    auto &thread = threads_.at(current_thread_);
+    if (thread.lifecycle != Lifecycle::Started)
+    {
+        throw std::logic_error("Interrupt callback needs a ready thread");
+    }
+    if (!interrupts_enabled_ || thread.callback)
+    {
+        return false;
+    }
+    begin_callback(thread, entry, {argument, common.value_of(), 0}, std::nullopt);
+    return true;
 }
 
 void Kernel::advance_time(std::uint64_t microseconds)
@@ -388,7 +433,21 @@ GuestThreadInfo Kernel::thread_status(std::uint32_t id) const
     {
         status = ThreadStatus::Waiting;
         // PSP sleep/delay wait types; controller waits use an event flag approximation.
-        info.wait_type = thread.wait == Wait::SleepCallback ? 1 : thread.wait == Wait::Delay ? 2 : 4;
+        switch (thread.wait)
+        {
+        case Wait::SleepCallback:
+            info.wait_type = 1;
+            break;
+        case Wait::Delay:
+            info.wait_type = 2;
+            break;
+        case Wait::Vblank:
+            info.wait_type = 12;
+            break;
+        default:
+            info.wait_type = 4;
+            break;
+        }
     }
     info.status = static_cast<std::uint32_t>(status);
     info.entry = creation.entry.value_of();
@@ -506,6 +565,26 @@ void Kernel::signal_semaphore(std::uint32_t id, std::uint32_t count)
         throw std::runtime_error("Invalid semaphore signal count");
     }
     semaphore.count += count;
+}
+
+std::uint32_t Kernel::create_event_flag(const EventFlagCreation &creation)
+{
+    if ((creation.attributes & ~0x200U) != 0 || creation.options.value_of() != 0)
+    {
+        throw std::runtime_error("Unsupported event flag creation parameters");
+    }
+    memory_.read_c_string(creation.name, 32);
+    const auto id = next_id_++;
+    event_flags_.emplace(id, creation.bits);
+    return id;
+}
+
+void Kernel::delete_event_flag(std::uint32_t id)
+{
+    if (event_flags_.erase(id) == 0)
+    {
+        throw std::runtime_error("Invalid event flag ID");
+    }
 }
 
 std::uint32_t Kernel::allocate_partition(PartitionAllocation allocation)
@@ -636,25 +715,35 @@ void Kernel::wake_callbacks()
         {
             continue;
         }
-        const auto stack_pointer = thread.state.registers[29];
-        if (stack_pointer < thread.stack.value_of() + 16 ||
-            static_cast<std::uint64_t>(stack_pointer) >
-                static_cast<std::uint64_t>(thread.stack.value_of()) + thread.creation.stack_size)
-        {
-            throw std::runtime_error("Insufficient thread stack for callback entry");
-        }
-        thread.callback = CallbackContext{thread.state, id};
-        thread.state.program_counter = callback.entry;
-        thread.state.next_program_counter = GuestAddress{callback.entry.value_of() + 4};
-        thread.state.registers[4] = std::exchange(callback.notifications, 0);
-        thread.state.registers[5] = 0; // Exit notification argument.
-        thread.state.registers[6] = callback.common.value_of();
-        thread.state.registers[29] = (stack_pointer - 16) & ~15U;
-        thread.state.registers[31] = return_address_.value_of() + 4;
-        thread.state.load_linked = false;
-        thread.lifecycle = Lifecycle::Started;
+        begin_callback(thread, callback.entry, {callback.notifications, 0, callback.common.value_of()}, id);
+        callback.notifications = 0;
         ready_.push_back(callback.owner);
     }
+}
+
+void Kernel::begin_callback(Thread &thread, GuestAddress entry, std::array<std::uint32_t, 3> arguments,
+                            std::optional<std::uint32_t> id)
+{
+    if (entry.value_of() == 0 || (entry.value_of() & 3U) != 0)
+    {
+        throw std::runtime_error("Callback entry must be non-null and aligned");
+    }
+    memory_.validate_range(entry, 4);
+    const auto stack_pointer = thread.state.registers[29];
+    if (stack_pointer < thread.stack.value_of() + 16 ||
+        static_cast<std::uint64_t>(stack_pointer) >
+            static_cast<std::uint64_t>(thread.stack.value_of()) + thread.creation.stack_size)
+    {
+        throw std::runtime_error("Insufficient thread stack for callback entry");
+    }
+    thread.callback = CallbackContext{thread.state, id};
+    thread.state.program_counter = entry;
+    thread.state.next_program_counter = GuestAddress{entry.value_of() + 4};
+    std::ranges::copy(arguments, thread.state.registers.begin() + 4);
+    thread.state.registers[29] = (stack_pointer - 16) & ~15U;
+    thread.state.registers[31] = return_address_.value_of() + 4;
+    thread.state.load_linked = false;
+    thread.lifecycle = Lifecycle::Started;
 }
 
 GuestMutexWorkArea Kernel::mutex_work_area(GuestAddress address) const

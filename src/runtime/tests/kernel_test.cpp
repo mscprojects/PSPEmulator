@@ -95,7 +95,8 @@ TEST(KernelTest, DelaySyscallDefersItsResultAndPreservesCommittedReturnAddress)
         .name = "ThreadManForUser", .version = 0, .attributes = 0, .functions = {{0xCEADEB47, GuestAddress{0x800}}}}};
     Display display(memory);
     Controller controller(memory, kernel);
-    SyscallDispatcher dispatcher(memory, kernel, io, display, controller, imports);
+    Ge ge(memory, kernel, 1000);
+    SyscallDispatcher dispatcher(memory, kernel, io, display, controller, ge, imports);
     Cpu cpu(memory);
     auto &state = kernel.current_thread_state();
     state.registers[31] = 0x900;

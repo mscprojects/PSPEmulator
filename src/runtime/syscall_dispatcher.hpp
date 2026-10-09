@@ -4,6 +4,7 @@
 #include "loader/prx.hpp"
 #include "runtime/controller.hpp"
 #include "runtime/display.hpp"
+#include "runtime/ge.hpp"
 #include "runtime/guest_io.hpp"
 #include "runtime/kernel.hpp"
 
@@ -25,7 +26,7 @@ class SyscallDispatcher
     };
 
 public:
-    SyscallDispatcher(Memory &memory, Kernel &kernel, GuestIo &io, Display &display, Controller &controller,
+    SyscallDispatcher(Memory &memory, Kernel &kernel, GuestIo &io, Display &display, Controller &controller, Ge &ge,
                       std::span<const PrxImportLibrary> imports);
     // A blocking service leaves v0 untouched until its wait completes.
     void handle(const Syscall &syscall, CpuState &state);
@@ -38,6 +39,7 @@ private:
     GuestIo &io_;
     Display &display_;
     Controller &controller_;
+    Ge &ge_;
     std::vector<ImportBinding> imports_;
 };
 

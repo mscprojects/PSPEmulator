@@ -11,7 +11,8 @@ Runtime::Runtime(const ParsedPrx &prx, const ExecutionOptions &options)
     : loaded_(prepare_prx(prx, options.load_address, options.memory_size)), cpu_(loaded_.memory),
       kernel_(loaded_.memory, options.load_address, options.memory_size, prx.segments, loaded_.module.global_pointer),
       io_(loaded_.memory), display_(loaded_.memory), controller_(loaded_.memory, kernel_),
-      dispatcher_(loaded_.memory, kernel_, io_, display_, controller_, loaded_.imports),
+      ge_(loaded_.memory, kernel_, options.max_instructions),
+      dispatcher_(loaded_.memory, kernel_, io_, display_, controller_, ge_, loaded_.imports),
       instruction_budget_(options.max_instructions)
 {
     if (instruction_budget_ == 0)
@@ -37,11 +38,8 @@ ExecutionEvent Runtime::advance()
             next_vblank_ = kernel_.next_vblank_time();
             return ExecutionEvent::Vblank;
         }
-        const auto selection = kernel_.select_next_thread(next_vblank_);
-        if (selection == ThreadSelection::Idle)
-        {
-            continue;
-        }
+        const auto gpu_running = ge_.runnable();
+        const auto selection = kernel_.select_next_thread(gpu_running ? kernel_.system_time() : next_vblank_);
         if (selection == ThreadSelection::Finished)
         {
             display_.capture();
@@ -53,6 +51,18 @@ ExecutionEvent Runtime::advance()
         {
             continue;
         }
+        // One GE command and one CPU instruction can progress in the same guest
+        // microsecond. GPU-only work advances time without consuming CPU instructions.
+        ge_.step();
+        if (selection == ThreadSelection::Idle)
+        {
+            if (gpu_running)
+            {
+                kernel_.advance_time(1);
+            }
+            continue;
+        }
+        ge_.deliver_interrupt();
         auto &state = kernel_.current_thread_state();
         const auto pc = state.program_counter;
         try

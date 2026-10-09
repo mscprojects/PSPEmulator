@@ -49,6 +49,7 @@ add_library(psp_core
     src/loader/prx.cpp
     src/runtime/controller.cpp
     src/runtime/display.cpp
+    src/runtime/ge.cpp
     src/runtime/execution.cpp
     src/runtime/guest_io.cpp
     src/runtime/guest_structures.cpp

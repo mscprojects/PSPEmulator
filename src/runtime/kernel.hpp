@@ -49,6 +49,14 @@ struct SemaphoreCreation
     GuestAddress options;
 };
 
+struct EventFlagCreation
+{
+    GuestAddress name;
+    std::uint32_t attributes;
+    std::uint32_t bits;
+    GuestAddress options;
+};
+
 enum class ThreadSelection : std::uint8_t
 {
     Ready,
@@ -82,12 +90,14 @@ class Kernel
         SleepCallback,
         Delay,
         Controller,
+        Ge,
+        Vblank,
     };
 
     struct CallbackContext
     {
         CpuState state;
-        std::uint32_t id;
+        std::optional<std::uint32_t> id;
     };
 
     struct Thread
@@ -142,12 +152,18 @@ public:
     void delay_thread(std::uint32_t microseconds);
     void wait_controller();
     void wake_controller(std::uint32_t id);
+    void wait_ge();
+    void wake_ge(std::uint32_t id);
+    void wait_vblank();
     std::uint32_t create_callback(GuestAddress entry, GuestAddress common);
     void register_exit_callback(std::uint32_t id);
     void sleep_thread_callbacks();
     // Queue a notification; guest code runs only in its owner's callback-enabled sleep.
     // An early request is retained until an exit callback is registered.
     void request_exit();
+    // Run a GE interrupt callback on the selected ready thread. Returns false
+    // while interrupts are masked or another callback is active; callers retain it.
+    bool enter_interrupt_callback(GuestAddress entry, std::uint32_t argument, GuestAddress common);
     // Runtime currently advances one microsecond per instruction, a provisional
     // deterministic rate rather than a cycle-accurate CPU clock.
     void advance_time(std::uint64_t microseconds);
@@ -174,6 +190,8 @@ public:
     void delete_semaphore(std::uint32_t id);
     void wait_semaphore(std::uint32_t id, std::uint32_t count, GuestAddress timeout);
     void signal_semaphore(std::uint32_t id, std::uint32_t count);
+    std::uint32_t create_event_flag(const EventFlagCreation &creation);
+    void delete_event_flag(std::uint32_t id);
 
     std::uint32_t allocate_partition(PartitionAllocation allocation);
     void free_partition(std::uint32_t id);
@@ -188,6 +206,8 @@ private:
     void place_arguments(Thread &thread, PayloadSpan arguments);
     void wake_delayed_threads();
     void wake_callbacks();
+    void begin_callback(Thread &thread, GuestAddress entry, std::array<std::uint32_t, 3> arguments,
+                        std::optional<std::uint32_t> id);
     GuestMutexWorkArea mutex_work_area(GuestAddress address) const;
     void validate_mutex_count(const GuestMutexWorkArea &work_area, std::uint32_t count) const;
 
@@ -210,6 +230,7 @@ private:
     std::optional<int> exit_code_;
     std::map<std::uint32_t, GuestAddress> mutexes_;
     std::map<std::uint32_t, Semaphore> semaphores_;
+    std::map<std::uint32_t, std::uint32_t> event_flags_;
 };
 
 } // namespace psp::detail

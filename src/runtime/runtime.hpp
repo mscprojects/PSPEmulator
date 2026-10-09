@@ -28,6 +28,7 @@ private:
     GuestIo io_;
     Display display_;
     Controller controller_;
+    Ge ge_;
     SyscallDispatcher dispatcher_;
     std::uint64_t instruction_budget_;
     std::uint64_t instructions_{};
