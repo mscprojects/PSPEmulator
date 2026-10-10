@@ -118,6 +118,26 @@ TEST(KernelTest, DelaySyscallDefersItsResultAndPreservesCommittedReturnAddress)
     EXPECT_EQ(state.registers[2], 0U);
 }
 
+TEST(KernelTest, EventWaitsEndWithTheirResultAndRejectReasonsWithDedicatedServices)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    kernel.initialize(GuestAddress{0x800}, {});
+    const auto main = kernel.current_thread_id();
+    for (const auto reason :
+         {Kernel::Wait::None, Kernel::Wait::SleepCallback, Kernel::Wait::Delay, Kernel::Wait::Vblank})
+    {
+        EXPECT_THROW(kernel.wait(reason), std::invalid_argument);
+    }
+    EXPECT_EQ(kernel.thread_status(main).status.value(), 1U);
+    kernel.wait(Kernel::Wait::Controller);
+    ASSERT_EQ(kernel.select_next_thread(100), ThreadSelection::Idle);
+    EXPECT_THROW(kernel.wake(main, Kernel::Wait::Ge, 0), std::logic_error);
+    kernel.wake(main, Kernel::Wait::Controller, 7);
+    ASSERT_EQ(kernel.select_next_thread(100), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_state().registers[2], 7U);
+}
+
 TEST(KernelTest, IdleClockAdvancesToEarliestDeadlineAndPreservesEqualDeadlineOrder)
 {
     Memory memory(GuestAddress{0}, 0x40000);
@@ -658,7 +678,7 @@ TEST(KernelTest, ExitCallbackRunsOnOwnerAndRestoresCpuStateWithoutEndingSleep)
     const auto main = kernel.current_thread_id();
     const auto owner = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x11, "callbacks", 0});
     kernel.start_thread(owner, GuestAddress{0}, 0);
-    kernel.wait_controller();
+    kernel.wait(Kernel::Wait::Controller);
     ASSERT_EQ(kernel.select_next_thread(100), ThreadSelection::Ready);
     ASSERT_EQ(kernel.current_thread_id(), owner);
     const auto callback = kernel.create_callback(GuestAddress{0x900}, GuestAddress{0xC00});
@@ -705,7 +725,7 @@ TEST(KernelTest, ExitCallbackRunsOnOwnerAndRestoresCpuStateWithoutEndingSleep)
     EXPECT_EQ(memory.read_u32(GuestAddress{0xC04}), 0U);
     EXPECT_EQ(memory.read_u32(GuestAddress{0xC08}), 0xC00U);
     EXPECT_EQ(kernel.thread_status(owner).status.value(), 4U);
-    kernel.wake_controller(main);
+    kernel.wake(main, Kernel::Wait::Controller, 1);
     ASSERT_EQ(kernel.select_next_thread(200), ThreadSelection::Ready);
     EXPECT_EQ(kernel.current_thread_id(), main);
     kernel.current_thread_state().load_linked = true;
@@ -784,9 +804,9 @@ TEST(KernelTest, GeInterruptPreservesIdleWaitAndCompletionsDuringItsExecution)
             const auto id = kernel.current_thread_id();
             auto saved = kernel.current_thread_state();
             if (kind == 0)
-                kernel.wait_ge();
+                kernel.wait(Kernel::Wait::Ge);
             if (kind == 1)
-                kernel.wait_controller();
+                kernel.wait(Kernel::Wait::Controller);
             if (kind == 2)
                 kernel.delay_thread(10);
             if (kind == 3)
@@ -796,16 +816,16 @@ TEST(KernelTest, GeInterruptPreservesIdleWaitAndCompletionsDuringItsExecution)
             EXPECT_FALSE(kernel.interrupts_enabled());
             EXPECT_FALSE(kernel.enter_interrupt_callback(GuestAddress{0x800}, 8, GuestAddress{0}));
             EXPECT_THROW(kernel.delay_thread(0), std::logic_error);
-            EXPECT_THROW(kernel.wait_ge(), std::logic_error);
-            EXPECT_THROW(kernel.wait_controller(), std::logic_error);
+            EXPECT_THROW(kernel.wait(Kernel::Wait::Ge), std::logic_error);
+            EXPECT_THROW(kernel.wait(Kernel::Wait::Controller), std::logic_error);
             EXPECT_THROW(kernel.sleep_thread_callbacks(), std::runtime_error);
             EXPECT_THROW(kernel.exit_thread(), std::runtime_error);
             const auto complete = [&]
             {
                 if (kind == 0)
-                    kernel.wake_ge(id);
+                    kernel.wake(id, Kernel::Wait::Ge, 0);
                 if (kind == 1)
-                    kernel.wake_controller(id);
+                    kernel.wake(id, Kernel::Wait::Controller, 1);
                 if (kind == 2)
                     kernel.advance_time(10);
                 if (kind == 3)
@@ -829,7 +849,7 @@ TEST(KernelTest, GeInterruptPreservesIdleWaitAndCompletionsDuringItsExecution)
             saved.registers[2] = kind == 1 ? 1 : 0;
             EXPECT_EQ(state, saved);
             EXPECT_TRUE(kernel.interrupts_enabled());
-            kernel.wait_ge(); // No stale ready entry may resume this later wait.
+            kernel.wait(Kernel::Wait::Ge); // No stale ready entry may resume this later wait.
             EXPECT_EQ(kernel.select_next_thread(kernel.system_time()), ThreadSelection::Idle);
         }
     }
@@ -866,7 +886,7 @@ TEST(KernelTest, GeInterruptUsesAWaitingThreadAfterTheLastRunningThreadExits)
     const auto main = kernel.current_thread_id();
     const auto worker = kernel.create_thread({GuestAddress{0x900}, 0x1000, 0x30, "worker", 0});
     kernel.start_thread(worker, GuestAddress{0}, 0);
-    kernel.wait_ge();
+    kernel.wait(Kernel::Wait::Ge);
     ASSERT_EQ(kernel.select_next_thread(0), ThreadSelection::Ready);
     ASSERT_EQ(kernel.current_thread_id(), worker);
     kernel.exit_thread();
@@ -874,7 +894,7 @@ TEST(KernelTest, GeInterruptUsesAWaitingThreadAfterTheLastRunningThreadExits)
     EXPECT_TRUE(kernel.interrupt_callback_ready());
     ASSERT_TRUE(kernel.enter_interrupt_callback(GuestAddress{0x800}, 7, GuestAddress{0}));
     EXPECT_EQ(kernel.current_thread_id(), main);
-    kernel.wake_ge(main);
+    kernel.wake(main, Kernel::Wait::Ge, 0);
     auto &state = kernel.current_thread_state();
     state.program_counter = GuestAddress{state.registers[31]};
     ASSERT_EQ(kernel.select_next_thread(0), ThreadSelection::Ready);

@@ -70,6 +70,20 @@ enum class ThreadSelection : std::uint8_t
 // blocking synchronization and equal-priority time slicing remain unsupported.
 class Kernel
 {
+public:
+    // Why a thread is blocked. Delays, vblank waits, and callback-enabled sleep have
+    // their own services; other waits use wait() and end through wake().
+    enum class Wait : std::uint8_t
+    {
+        None,
+        SleepCallback,
+        Delay,
+        Controller,
+        Ge,
+        Vblank,
+    };
+
+private:
     enum class AllocationDirection : std::uint8_t
     {
         Low,
@@ -82,16 +96,6 @@ class Kernel
         Started,
         Waiting,
         Finished,
-    };
-
-    enum class Wait : std::uint8_t
-    {
-        None,
-        SleepCallback,
-        Delay,
-        Controller,
-        Ge,
-        Vblank,
     };
 
     struct CallbackContext
@@ -153,10 +157,11 @@ public:
     // Delay the current thread; v0 is supplied when the delay expires. A zero
     // delay yields to ready threads of equal priority without advancing guest time.
     void delay_thread(std::uint32_t microseconds);
-    void wait_controller();
-    void wake_controller(std::uint32_t id);
-    void wait_ge();
-    void wake_ge(std::uint32_t id);
+    // Block the current thread until wake() ends this wait. Accepts Controller and Ge.
+    void wait(Wait reason);
+    // End a thread's wait for reason and supply v0. A thread interrupted by a GE callback
+    // resumes its saved continuation only after the callback returns.
+    void wake(std::uint32_t id, Wait reason, std::uint32_t result);
     void wait_vblank();
     std::uint32_t create_callback(GuestAddress entry, GuestAddress common);
     void register_exit_callback(std::uint32_t id);
@@ -215,7 +220,8 @@ private:
     void place_arguments(Thread &thread, PayloadSpan arguments);
     void wake_delayed_threads();
     void wake_callbacks();
-    void complete_wait(std::uint32_t id, Wait wait, std::uint32_t result);
+    // Only a running thread outside a GE interrupt callback can block.
+    void block_current_thread(Wait reason);
     void begin_callback(Thread &thread, GuestAddress entry, std::array<std::uint32_t, 3> arguments,
                         std::optional<std::uint32_t> id);
     GuestMutexWorkArea mutex_work_area(GuestAddress address) const;

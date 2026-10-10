@@ -246,7 +246,7 @@ std::optional<std::uint32_t> Ge::sync(std::optional<std::uint32_t> id, std::uint
         return current_status;
     }
     waiters_.push_back({kernel_.current_thread_id(), id});
-    kernel_.wait_ge();
+    kernel_.wait(Kernel::Wait::Ge);
     return std::nullopt;
 }
 
@@ -256,7 +256,7 @@ void Ge::wake_waiters()
     {
         if (waiter->list ? status(*waiter->list) == 0 : queue_.empty())
         {
-            kernel_.wake_ge(waiter->thread);
+            kernel_.wake(waiter->thread, Kernel::Wait::Ge, 0);
             waiter = waiters_.erase(waiter);
         }
         else

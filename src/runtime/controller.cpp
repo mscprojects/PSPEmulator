@@ -47,7 +47,7 @@ std::optional<std::uint32_t> Controller::read_positive(GuestAddress address, std
         return 1;
     }
     readers_.push_back({kernel_.current_thread_id(), address});
-    kernel_.wait_controller();
+    kernel_.wait(Kernel::Wait::Controller);
     return std::nullopt;
 }
 
@@ -71,7 +71,7 @@ void Controller::vblank()
     }
     const auto reader = readers_.front();
     write_controller_data(memory_, reader.address, data);
-    kernel_.wake_controller(reader.thread);
+    kernel_.wake(reader.thread, Kernel::Wait::Controller, 1);
     readers_.pop_front();
 }
 

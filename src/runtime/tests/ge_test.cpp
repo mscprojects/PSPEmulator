@@ -226,7 +226,7 @@ TEST_F(GeTest, CyclicJumpIsBoundedEvenWithAllCpuThreadsWaiting)
     memory.write_u32(GuestAddress{0x08001000}, 0x10080000);
     memory.write_u32(GuestAddress{0x08001004}, 0x08001004);
     bounded.enqueue({GuestAddress{0x08001000}, GuestAddress{0}, 0xFFFFFFFF, GuestAddress{0}});
-    kernel.wait_ge();
+    kernel.wait(Kernel::Wait::Ge);
     for (unsigned index = 0; index < 3; ++index)
     {
         EXPECT_EQ(kernel.select_next_thread(kernel.system_time()), ThreadSelection::Idle);

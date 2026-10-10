@@ -224,46 +224,42 @@ void Kernel::delay_thread(std::uint32_t microseconds)
     {
         throw std::overflow_error("Guest delay exceeds clock range");
     }
-    auto &thread = threads_.at(current_thread_);
-    if (thread.lifecycle != Lifecycle::Started || (thread.callback && !thread.callback->id))
-    {
-        throw std::logic_error("Only a running thread can delay");
-    }
+    block_current_thread(Wait::Delay);
     delayed_.emplace(system_time_ + microseconds, current_thread_);
-    thread.lifecycle = Lifecycle::Waiting;
-    thread.wait = Wait::Delay;
 }
 
-void Kernel::wait_controller()
+void Kernel::wait(Wait reason)
 {
-    auto &thread = threads_.at(current_thread_);
-    if (thread.lifecycle != Lifecycle::Started || (thread.callback && !thread.callback->id))
+    if (reason != Wait::Controller && reason != Wait::Ge)
     {
-        throw std::logic_error("Only a running thread can wait for a controller sample");
+        throw std::invalid_argument("This wait reason has its own kernel service");
     }
-    thread.lifecycle = Lifecycle::Waiting;
-    thread.wait = Wait::Controller;
+    block_current_thread(reason);
 }
 
-void Kernel::wake_controller(std::uint32_t id)
+void Kernel::wake(std::uint32_t id, Wait reason, std::uint32_t result)
 {
-    complete_wait(id, Wait::Controller, 1);
-}
-
-void Kernel::wait_ge()
-{
-    auto &thread = threads_.at(current_thread_);
-    if (thread.lifecycle != Lifecycle::Started || (thread.callback && !thread.callback->id))
+    auto &thread = threads_.at(id);
+    if (thread.callback && !thread.callback->id)
     {
-        throw std::logic_error("Only a running thread can wait for the GE");
+        auto &interrupted = *thread.callback;
+        if (interrupted.lifecycle != Lifecycle::Waiting || interrupted.wait != reason)
+        {
+            throw std::logic_error("Interrupted thread is not waiting for this event");
+        }
+        interrupted.state.registers[2] = result;
+        interrupted.lifecycle = Lifecycle::Started;
+        interrupted.wait = Wait::None;
+        return;
     }
-    thread.lifecycle = Lifecycle::Waiting;
-    thread.wait = Wait::Ge;
-}
-
-void Kernel::wake_ge(std::uint32_t id)
-{
-    complete_wait(id, Wait::Ge, 0);
+    if (thread.lifecycle != Lifecycle::Waiting || thread.wait != reason)
+    {
+        throw std::logic_error("Thread is not waiting for this event");
+    }
+    thread.state.registers[2] = result;
+    thread.lifecycle = Lifecycle::Started;
+    thread.wait = Wait::None;
+    ready_.push_back(id);
 }
 
 void Kernel::wait_vblank()
@@ -751,7 +747,7 @@ void Kernel::wake_delayed_threads()
         const auto id = delayed_.begin()->second;
         const auto &thread = threads_.at(id);
         const auto wait = thread.callback && !thread.callback->id ? thread.callback->wait : thread.wait;
-        complete_wait(id, wait, 0);
+        wake(id, wait, 0);
         delayed_.erase(delayed_.begin());
     }
 }
@@ -775,29 +771,15 @@ void Kernel::wake_callbacks()
     }
 }
 
-void Kernel::complete_wait(std::uint32_t id, Wait wait, std::uint32_t result)
+void Kernel::block_current_thread(Wait reason)
 {
-    auto &thread = threads_.at(id);
-    if (thread.callback && !thread.callback->id)
+    auto &thread = threads_.at(current_thread_);
+    if (thread.lifecycle != Lifecycle::Started || (thread.callback && !thread.callback->id))
     {
-        auto &interrupted = *thread.callback;
-        if (interrupted.lifecycle != Lifecycle::Waiting || interrupted.wait != wait)
-        {
-            throw std::logic_error("Interrupted thread is not waiting for this event");
-        }
-        interrupted.state.registers[2] = result;
-        interrupted.lifecycle = Lifecycle::Started;
-        interrupted.wait = Wait::None;
-        return;
+        throw std::logic_error("Only a running thread outside a GE interrupt callback can wait");
     }
-    if (thread.lifecycle != Lifecycle::Waiting || thread.wait != wait)
-    {
-        throw std::logic_error("Thread is not waiting for this event");
-    }
-    thread.state.registers[2] = result;
-    thread.lifecycle = Lifecycle::Started;
-    thread.wait = Wait::None;
-    ready_.push_back(id);
+    thread.lifecycle = Lifecycle::Waiting;
+    thread.wait = reason;
 }
 
 void Kernel::begin_callback(Thread &thread, GuestAddress entry, std::array<std::uint32_t, 3> arguments,
