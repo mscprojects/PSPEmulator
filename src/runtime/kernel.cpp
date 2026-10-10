@@ -747,9 +747,12 @@ void Kernel::wake_callbacks()
 {
     for (auto &[id, callback] : callbacks_)
     {
+        if (callback.notifications == 0)
+        {
+            continue;
+        }
         auto &thread = threads_.at(callback.owner);
-        if (callback.notifications == 0 || thread.lifecycle != Lifecycle::Waiting ||
-            thread.wait != Wait::SleepCallback || thread.callback)
+        if (thread.lifecycle != Lifecycle::Waiting || thread.wait != Wait::SleepCallback || thread.callback)
         {
             continue;
         }
