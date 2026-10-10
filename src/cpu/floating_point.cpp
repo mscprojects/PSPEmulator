@@ -190,6 +190,8 @@ FloatingPointResult evaluate_floating_point(FloatingPointOperation operation, st
     return {bits, exceptions};
 }
 
+// Operand order matters for less-than, as in the COP1 encoding; the predicate selects the test.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 FloatingPointComparison compare_floating_point(std::uint32_t left, std::uint32_t right, std::uint32_t predicate)
 {
     const auto left_magnitude = left & kMagnitude;
