@@ -1,131 +1,128 @@
 # Runtime and syscall handling
 
-`Execution` owns an independent incremental execution through `detail::Runtime`. `advance()` returns at the next vblank or guest termination, and `pixels()` exposes the captured packed 480 × 272 RGBA bytes. `guest_time()` reports the event time, `output()` exposes captured console bytes even before termination, and `result()` is available after `Finished`. Repeated calls after termination return `Finished` without advancing time. `run_to_completion()` advances through successive events for headless callers, and `execute_prx()` wraps it. Because no host input can arrive, it throws when every live thread waits for a callback notification or GE completion, no notification is pending, and the GE has no runnable list or pending interrupt. Without that check, idle vblanks would repeat forever without consuming the instruction budget. `Runtime` initializes the program, steps the selected CPU state, enforces the instruction budget, adds guest instruction context to faults, and returns captured output and termination status. Other components own the state and behavior of their services; none receives a `Runtime&`.
+## Execution API
 
-## Ownership
+- `Execution` runs one independent guest program; `execute_prx()` runs it headless to completion.
+- `advance()` returns at the next vblank or at termination. After termination it keeps returning `Finished` without advancing time.
+- `pixels()` returns the packed `kLcdWidth` × `kLcdHeight` RGBA frame at the last event.
+- `output()` returns captured console bytes at any time; `result()` is available after `Finished`.
+- `run_to_completion()` throws when the guest can only be woken by host input (every live thread waits for a callback notification or GE completion with nothing pending). Otherwise it would loop over idle vblanks forever.
+- Guest faults, unsupported imports, and budget exhaustion throw with the guest PC and instruction word.
 
-Each component has one header and one implementation file. Related kernel services stay together in `kernel.hpp` and `kernel.cpp`; file size alone is not a reason to split them.
+## Components
 
-- `AddressArena` owns address-ordered free guest ranges, 256-byte alignment, low/high placement, and merging of freed ranges. It knows nothing about kernel objects.
-- `Memory` owns RAM and VRAM backing bytes and shared address aliases, created by `create_psp_memory()` and filled by `prepare_prx()`. See [guest memory](memory.md) for the execution layout and access rules.
-- `Cpu` executes one Allegrex instruction against guest memory and the supplied `CpuState`.
-- `Kernel` owns saved CPU states, thread creation metadata, the ready queue, guest time, delay deadlines, interrupt masking and pending events, callback ownership and notifications, execution termination, mutex identities, semaphore counts, partition block IDs, and the shared object-ID counter. Each thread has an explicit created, started, waiting, or finished lifecycle; started threads are reported as running or ready according to the selected thread ID. Thread stacks and partition blocks share one `AddressArena`; the kernel maps each block ID to its range. Guest mutex work areas remain authoritative for ownership and recursive counts; mutex operations use the kernel's current thread ID.
-- `Controller` owns host input, sampling mode, the latest unread sample, and pending controller read buffers. It writes samples and asks the kernel to wake their readers at guest vblank.
-- `Ge` owns display-list slots, FIFO submission, stalls, rendering registers, GE callback registrations, pending FINISH notifications, and synchronization waiters. It validates pipeline state and decodes vertices before drawing.
-- The rasterizer (`rasterizer.hpp`) writes triangles and clear rectangles into a validated guest framebuffer. It receives a render target, decoded vertices, and shading or clear mode, and does not read GE registers.
-- `Display` owns the active and pending framebuffer selections and a packed pixel snapshot, independent of SDL.
-- `lcd.hpp` defines the panel size and 60000/1001 Hz refresh once. The display, GE clipping, kernel vblank edges, and SDL frame pacing all use it, so the frontend needs no runtime internals.
-- `GuestIo` owns captured output and the autotest emulator device protocol. It exposes no host filesystem or display.
-- `SyscallDispatcher` owns import bindings and translates guest registers into named operations on those components. Small standard-stream and UTC timezone handlers remain here.
+Each component has one header and one source file. None receives a `Runtime&`.
 
-## Syscall flow
+- `Runtime`: owns the components, steps the selected thread, enforces the instruction budget, and is the only code that advances guest time.
+- `Cpu`: executes one Allegrex instruction on a supplied `CpuState`; see [CPU reference](cpu-reference.md).
+- `Memory`: RAM, VRAM, and address aliases; see [guest memory](memory.md).
+- `Kernel`: threads, scheduling, guest clock, vblank timing, interrupts, callbacks, sync objects, and partition block IDs.
+- `AddressArena`: free guest address ranges shared by thread stacks and partition blocks.
+- `SyscallDispatcher`: binds imports and maps guest registers to component calls.
+- `Display`: active and pending framebuffers and the captured frame.
+- `Controller`: host input, sampling mode, and pending reads.
+- `Ge`: display lists, GE callbacks, and drawing-state validation.
+- `rasterizer.hpp`: draws triangles and clears into a validated framebuffer; never reads GE registers.
+- `GuestIo`: captured output and the autotest emulator device.
+- `guest_structures.hpp`: little-endian guest layouts with compile-time size and offset checks.
+- `lcd.hpp`: panel size and 60000/1001 Hz refresh, shared by the runtime and the SDL frontend.
 
-The dispatcher patches each function import stub with `JR $ra` followed by `SYSCALL code`. It assigns the encoded code locally and maps it to the import's library and NID. The code is neither the NID nor a syscall result.
+## Syscalls
 
-`Cpu::step()` returns `std::optional<Syscall>`. Ordinary instructions return no event. A syscall event contains the encoded code and the syscall instruction address. The CPU commits instruction control flow before returning the event, including a pending delay-slot return target. It does not call PSP service implementations.
-
-The runtime passes the event and current CPU state to the dispatcher. Integer arguments occupy registers 4–11 (`a0`–`a7` in the PSP MIPS32 EABI). The dispatcher supplies the service result in register 2 (`v0`); a 64-bit system-time result also uses register 3 (`v1`). It completes service handling before the runtime steps the next instruction.
-
-## Guest structures
-
-[`guest_structures.hpp`](../src/runtime/guest_structures.hpp) defines named guest layouts based on the [PSPSDK thread header](https://github.com/pspdev/pspsdk/blob/master/src/user/pspthreadman.h), controller header, and [GE header](../third_party/pspsdk/src/ge/pspge.h). Each 32-bit numeric field is a four-byte little-endian `GuestWord`, including guest pointers; controller coordinates and reserved bytes use fixed byte fields. The layouts contain no native pointers or host-sized integers. Compile-time size and offset checks guard the ABI. Complete structures are converted to byte arrays with `std::bit_cast` and written through `Memory::write_bytes()`, which validates the whole range before modifying guest memory. No preliminary read-and-discard is needed for output validation. Structure reads use `Memory::read_into()` to copy directly into caller-owned storage after checking the full guest range, without allocating an intermediate byte vector.
-
-`sceKernelReferThreadStatus` is imported from `ThreadManForUser` with NID `0x17C1684E`. Register `a0` supplies the thread ID; zero selects the current thread in this implementation. Register `a1` points to a `SceKernelThreadInfo` buffer whose initial `size` must be 104. `Kernel::thread_status()` builds the named fields and the dispatcher writes the complete structure, returning zero in `v0`. Invalid IDs or buffers and unsupported structure sizes produce host exceptions. Scheduling counters remain zero; delivering an interrupt without switching threads does not increment a preemption counter. A delayed thread reports waiting status 4 and delay wait type 2 with no wait object ID; its wait fields return to zero when the delay expires. These are the current runtime's limits, rather than a complete hardware contract; the bundled [`refer.c`](../third_party/pspautotests/tests/threads/threads/refer.c) probes additional sizes and behaviors.
-
-## Partition memory
-
-The allocation arena begins at the loaded image's end, reported by `prepare_prx()`, and ends at the configured RAM limit. Its bounds and allocation sizes use 256-byte alignment. A return sentinel and thread stacks reserve space in the same arena as partition blocks. VRAM remains separate.
-
-`sceKernelAllocPartitionMemory` (`SysMemUserForUser`, NID `0x237DBD4F`) supports user partition 2 and low/high allocation types 0/1. Low allocations use the lowest suitable free range; high allocations use the highest suitable range. Each block ID records the complete aligned allocation. `sceKernelGetBlockHeadAddr` (`0x9D9A5BA1`) returns its start address.
-
-`sceKernelFreePartitionMemory` (`0xB6D61D02`) returns a block's range to the arena, merges adjacent free ranges, removes its ID, and returns zero. It leaves the underlying RAM mapped and its bytes unchanged. `sceKernelTotalFreeMemSize` (`0xF919F628`) returns the sum of free ranges; `sceKernelMaxFreeMemSize` (`0xA291F107`) returns the largest contiguous range. Allocation failures and invalid or already-freed IDs still produce host exceptions, consistent with the runtime's existing service limits. Fixed-address allocations, additional partitions, and thread deletion/stack reclamation remain unsupported. Definitions come from the pinned [PSPSDK system-memory header](../third_party/pspsdk/src/user/pspsysmem.h).
+- Import stubs are patched to `JR $ra` followed by `SYSCALL code`. The code is a local index, not the NID.
+- `Cpu::step()` commits control flow, then returns the syscall event; it never calls services.
+- Arguments come from `a0`–`a7` (registers 4–11). Results go to `v0`; 64-bit time results also use `v1`.
+- Blocking services leave `v0` untouched; the wakeup supplies the result.
+- Calling an unsupported import throws with its library name and NID; an unbound syscall code also throws.
 
 ## Guest time and scheduling
 
-`Kernel` owns a 64-bit clock measured in guest microseconds, starting at zero. After each completed CPU instruction, `Runtime` advances it by one microsecond before dispatching a syscall. This is a provisional deterministic rate, not PSP instruction timing; host wall-clock time is never used. Idle time advances to the earlier of the next vblank and earliest pending delay deadline without executing instructions or consuming the instruction budget. `Runtime::advance()` is the only caller that moves the clock during execution: one microsecond per CPU instruction or GPU-only command, or an idle jump.
+- The clock counts guest microseconds from zero and never reads host time.
+- One CPU instruction or one GPU-only GE command advances it by one microsecond. This rate is provisional, not PSP timing.
+- When no thread is ready, time jumps to the earlier of the next wakeup and the next vblank. Idle time does not consume the instruction budget.
+- Ready threads run by lowest PSP priority, FIFO among equals. A higher-priority ready thread preempts at the next instruction boundary.
+- Thread switches happen only between instructions, never inside `Cpu::step()` or dispatch.
+- Equal deadlines wake in delay order.
+- When a delay ends on a vblank edge, the vblank handoff happens first; the thread wakes before the next guest instruction.
+- Execution ends when no running, ready, or waiting thread remains, or when the guest calls `sceKernelExitGame`.
+- Unsupported: equal-priority time slicing, timeouts, blocking mutex and semaphore waits, and short-delay hardware granularity ([`delayzero`](../third_party/pspautotests/tests/threads/scheduling/delayzero.c)).
 
-The [PSPSDK thread header](https://github.com/pspdev/pspsdk/blob/master/src/user/pspthreadman.h) defines the signatures and microsecond units; its [import table](https://github.com/pspdev/pspsdk/blob/master/src/user/ThreadManForUser.S) supplies the NIDs. These services are imported from `ThreadManForUser`:
+Services (`ThreadManForUser`):
 
-- `sceKernelGetSystemTimeLow` (`0x369ED59D`) takes no arguments and returns the low 32 bits of guest time in `v0`, wrapping at 2³² microseconds.
-- `sceKernelGetSystemTimeWide` (`0x82BC5777`) takes no arguments and returns the same clock in `v0` (low word) and `v1` (high word), including elapsed idle time.
-- `sceKernelDelayThread` (`0xCEADEB47`) takes an unsigned microsecond delay in `a0`. The kernel records the current time plus that delay and marks the caller waiting. Dispatch leaves `v0` untouched; wakeup supplies zero for success before the caller resumes at its already-committed syscall return address. A zero delay yields to already-ready threads of equal priority without advancing time. This simplified zero-delay behavior and exact deadlines do not reproduce the hardware's short-delay granularity, probed by the bundled [`delayzero` test](../third_party/pspautotests/tests/threads/scheduling/delayzero.c).
+- `sceKernelGetSystemTimeLow` (`0x369ED59D`): low 32 bits of guest time.
+- `sceKernelGetSystemTimeWide` (`0x82BC5777`): full 64-bit time in `v0`/`v1`.
+- `sceKernelDelayThread` (`0xCEADEB47`): waits `a0` microseconds and returns zero. A zero delay yields to ready threads of equal priority.
+- `sceKernelReferThreadStatus` (`0x17C1684E`): writes a 104-byte `SceKernelThreadInfo` for thread `a0` (zero selects the current thread). Wait types: sleep 1, delay 2, controller and GE 4 (event-flag approximation), vblank 12. Scheduling counters stay zero.
 
-`Kernel::select_next_thread()` runs between CPU steps. Expired delays enter the ready queue in deadline order, with equal deadlines preserving insertion order. Ready threads are selected by lowest numeric PSP priority, with FIFO ordering for ties. The current thread continues until it waits, exits, reaches the runtime's return sentinel after its return delay slot, or a higher-priority thread becomes ready. Preemption happens at the next instruction boundary; the interrupted thread rejoins the ready queue with its saved CPU state and its link bit cleared. If no thread is ready, pending waits keep execution alive. Selection never advances the clock. `ThreadSelection::Idle` reports that waiting threads remain, and `Runtime` then advances to the earlier of `Kernel::next_wakeup_time()` and the next vblank; indefinite sleep and controller waits still expose every vblank. `Ready` permits a CPU step and `Finished` reports termination. When a delay ends on a vblank edge, the vblank handoff happens first and the delayed thread wakes at the next selection, before any further guest instruction. Running and idle execution handle this tie the same way. Execution ends only when no running, ready, or waiting thread remains, or a game-exit service ends it explicitly. Starting a thread, waking a delay or controller read, and notifying a sleeping callback owner can make a higher-priority thread ready. Equal-priority time slicing is not implemented.
+## Interrupts
 
-Other blocking synchronization waits, general callback APIs, timeout cancellation, and timer-driven time slicing remain unsupported. Thread switching happens after `Cpu::step()` and syscall dispatch have unwound, so references to the previous thread state remain valid throughout the instruction. A delay wakeup does not clear the load-link bit by itself; pending interrupt delivery is a separate operation.
+- Vblank is the only interrupt source (interrupt 30). Edge n occurs at n × 1001000/60 µs and is seen at the first whole microsecond at or after it.
+- Edges while interrupts are masked coalesce into one pending interrupt, delivered at the next instruction boundary once enabled and a thread is running.
+- Delivery is handled on the host: it clears the link bit (as the [`llsc` test](../third_party/pspautotests/tests/cpu/lsu/llsc.c) observes) and preserves all other CPU state, including a pending delay slot.
+- Unsupported: guest interrupt handlers, CP0 exception vectors and `ERET`, handler timing, and interrupt-driven preemption.
 
-## Periodic interrupts
+Services (`Kernel_Library`):
 
-The initial interrupt source is LCD vblank, interrupt 30 in the [PSPSDK interrupt header](https://github.com/pspdev/pspsdk/blob/master/src/user/pspintrman.h). The [display header](https://github.com/pspdev/pspsdk/blob/master/src/display/pspdisplay.h) specifies approximately 59.94005995 Hz, also recorded by the bundled [`display.expected`](../third_party/pspautotests/tests/display/display.expected). The runtime uses 60000/1001 Hz, with phase zero at guest clock startup. The nth edge occurs at n × 1001000/60 microseconds and becomes visible at the first integer microsecond at or after that edge. Counting crossed edges from the 64-bit clock avoids rounding drift. `next_vblank_time()` computes the next integer deadline from the same rational cadence. Incremental execution exposes every crossed display event, including idle periods; guest interrupt delivery can still coalesce masked events.
+- `sceKernelCpuSuspendIntr` (`0x092968F4`): disables delivery and returns the previous enable flag.
+- `sceKernelCpuResumeIntr` (`0x5F10D406`) and `sceKernelCpuResumeIntrWithSync` (`0x3B84732D`): restore bit 0 of `a0`; delivery waits for the next instruction boundary.
+- `sceKernelIsCpuIntrEnable` (`0xB55249D2`): current enable flag.
+- `sceKernelIsCpuIntrSuspended` (`0x47A0B729`): one when the whole `a0` word is zero, following [`suspended.expected`](../third_party/pspautotests/tests/intr/suspended.expected) rather than the PSPSDK comment.
 
-`Kernel::advance_time()` marks a vblank interrupt pending when time crosses an edge and reports the edge to `Runtime`, which hands off the frame before further guest work. The kernel's cached next edge is the only vblank cadence state. Multiple unhandled edges coalesce into one pending event. After thread selection and before the next CPU instruction, `Runtime` calls `Kernel::deliver_pending_interrupt()`. Masked interrupts remain pending. A waiting thread does not receive an interrupt; delivery waits until a thread is running. Idle clock advancement uses the same event-generation path as CPU execution.
+## Partition memory
 
-The HLE kernel handles interrupt entry and return immediately on the host. It clears the running thread's Allegrex link bit, as observed by the bundled [`llsc` hardware test](../third_party/pspautotests/tests/cpu/lsu/llsc.c), and preserves all registers, HI/LO, and both instruction addresses. A pending branch target and its unexecuted delay slot survive delivery. This models the observable effect of the kernel interrupt path for current programs. Guest subinterrupt handlers, CP0 exception vectors and `ERET`, interrupt-handler execution time, general interrupt source registration, display scanout, and interrupt-driven thread preemption remain unimplemented.
+- The arena spans from the end of the loaded image to the end of RAM, with 256-byte alignment. VRAM is outside it.
+- The return sentinel, thread stacks, and partition blocks share the arena.
+- `sceKernelAllocPartitionMemory` (`0x237DBD4F`): user partition 2, low (0) or high (1) placement.
+- `sceKernelGetBlockHeadAddr` (`0x9D9A5BA1`): block start address.
+- `sceKernelFreePartitionMemory` (`0xB6D61D02`): returns the range and merges neighbors; memory contents stay unchanged.
+- `sceKernelTotalFreeMemSize` (`0xF919F628`) and `sceKernelMaxFreeMemSize` (`0xA291F107`): total and largest free range.
+- Allocation failures and invalid IDs throw.
+- Unsupported: fixed-address allocation, other partitions, and stack reclamation.
 
-Interrupt-control services belong to `Kernel_Library`; their NIDs come from the [PSPSDK import table](https://github.com/pspdev/pspsdk/blob/master/src/user/Kernel_Library.S):
+## Display
 
-- `sceKernelCpuSuspendIntr` (`0x092968F4`) takes no arguments. It disables delivery and returns the previous enable flag, zero or one, in `v0`. A nested call returns zero.
-- `sceKernelCpuResumeIntr` (`0x5F10D406`) and `sceKernelCpuResumeIntrWithSync` (`0x3B84732D`) take saved flags in `a0`, restoring the enable bit from bit zero. They have void PSP signatures; this runtime writes zero to `v0`. Resuming does not deliver an interrupt inside syscall dispatch; delivery occurs at the next instruction boundary.
-- `sceKernelIsCpuIntrEnable` (`0xB55249D2`) takes no arguments and returns the current enable state in `v0`.
-- `sceKernelIsCpuIntrSuspended` (`0x47A0B729`) takes flags in `a0` and returns one when the entire flags word is zero, otherwise zero. The bundled [`suspended.expected`](../third_party/pspautotests/tests/intr/suspended.expected) supplies this behavior, including nonzero values other than one; the PSPSDK comment describes the return value differently.
-
-## Display services
-
-The initial LCD mode is 480 × 272. `sceGeEdramGetAddr` (`sceGe_user`, NID `0xE47E40E4`) returns `0x04000000`; the SDK uses its uncached alias `0x44000000`. `sceDisplaySetMode` (`sceDisplay`, `0x0E20F177`) accepts LCD mode 0 and dimensions 480 × 272. Other modes fail clearly.
-
-`sceDisplaySetFrameBuf` (`sceDisplay`, `0x289D82FE`) takes the top address, stride in pixels, pixel format, and synchronization in `a0`–`a3`. This milestone supports RGBA 8888 (format 3). A non-null address must be 16-byte aligned, the stride must be a power of two at least 480, and the complete stride × 272 × 4 range must fit one guest mapping without wrapping. Address zero disables the framebuffer. Invalid parameters or unsupported formats produce host exceptions with the calling guest instruction context.
-
-Sync 1 selects a framebuffer at the next vblank. The latest pending selection wins. Sync 0 selects immediately and cancels a pending change; this approximates the SDK's next-hsync behavior until scanout timing is implemented. At each vblank the runtime activates the pending selection. The first pixel read after an event copies 480 visible pixels per row using the guest stride, ignoring row padding. Guest memory changes only while execution advances, so this matches the frame at that event without copying frames nobody reads. Captured byte order is R, G, B, A; alpha is always 255. A disabled display captures opaque black. Termination between vblanks captures the active framebuffer's final contents without activating a pending next-frame selection.
-
-Display handoffs happen independently of interrupt enable state, guest vblank waits, and framebuffer selection. Pending interrupt delivery still occurs before the next instruction and preserves the existing link-bit and delay-slot behavior. `psp_frontend` alone depends on SDL3; its main-thread loop processes events, advances execution, uploads the snapshot, and presents it using nearest scaling and aspect-preserving letterboxing. Host deadlines use a fixed origin and 60000/1001 Hz. The final texture remains visible and resizable until close or Escape.
-
-Additional display services and pixel formats, general guest interrupt handlers, and accurate scanout remain unsupported.
-
-`sceDisplayWaitVblankStart` (`sceDisplay`, `0x984C27E7`) waits for the next integer guest vblank edge, including when called exactly on an edge. Dispatch defers its result; wakeup supplies zero. Thread status reports wait type 12. Waiting does not prevent GE commands or guest display handoffs.
+- `sceGeEdramGetAddr` (`0xE47E40E4`): returns `0x04000000`.
+- `sceDisplaySetMode` (`0x0E20F177`): accepts only LCD mode 0 at 480 × 272.
+- `sceDisplaySetFrameBuf` (`0x289D82FE`): RGBA 8888 only; 16-byte aligned address, power-of-two stride of at least 480, and a full stride × 272 × 4 range in one mapping. Address zero disables output.
+  - Sync 1 applies at the next vblank; the latest pending selection wins.
+  - Sync 0 applies immediately, approximating next-hsync until scanout is modeled.
+- `sceDisplayWaitVblankStart` (`0x984C27E7`): waits for the next vblank edge, even when called on one, and returns zero.
+- Frames are captured lazily on the first `pixels()` call after an event. Alpha is always 255; a disabled display is black.
+- Termination between vblanks shows the active framebuffer and ignores a pending selection.
+- Unsupported: other display services and pixel formats, and scanout timing.
 
 ## Controller and exit callbacks
 
-The [pinned controller header](../third_party/pspsdk/src/ctrl/pspctrl.h) defines `SceCtrlData` and its [import table](../third_party/pspsdk/src/ctrl/sceCtrl.S) supplies these `sceCtrl` services:
+- `sceCtrlSetSamplingCycle` (`0x6A2774F3`): only cycle 0 (vblank sampling).
+- `sceCtrlSetSamplingMode` (`0x1F4011E6`): digital 0 (neutral sticks) or analog 1.
+- `sceCtrlReadBufferPositive` (`0x1F803938`): count 1 into an aligned 16-byte buffer. Returns a fresh sample, or waits for the next vblank sample. Readers are served FIFO, one sample each.
+- Samples are taken at every vblank, regardless of interrupt masking, with the low 32 bits of guest time as timestamp.
+- `sceKernelCreateCallback` (`0xE81CAF8F`), `sceKernelRegisterExitCallback` (`0x4AC57943`), and `sceKernelSleepThreadCB` (`0x82826F70`) support the SDK exit-callback pattern.
+- `Execution::request_exit()` notifies the exit callback; an early request waits for registration. It never stops execution by itself.
+- The callback runs as guest code on its sleeping owner's stack with the notification count, zero, and its common pointer. A nonzero return deletes it, as in [PPSSPP](https://github.com/hrydgard/ppsspp/blob/master/Core/HLE/sceKernelThread.cpp).
+- Unsupported: historical buffers, peeks, negative reads, latches, other sampling periods, nested callback sleep, and other callback APIs.
 
-- `sceCtrlSetSamplingCycle` (`0x6A2774F3`) accepts cycle 0 for vblank sampling and returns the previous cycle, also zero. Nonzero periods are unsupported.
-- `sceCtrlSetSamplingMode` (`0x1F4011E6`) accepts digital 0 or analog 1 and returns the previous mode. The initial mode is digital.
-- `sceCtrlReadBufferPositive` (`0x1F803938`) accepts a four-byte-aligned output buffer in `a0` and count 1 in `a1`. Other counts fail clearly. The complete 16-byte buffer is validated before consuming data or blocking the caller. A fresh sample returns count 1; without one, dispatch leaves `v0` pending and the caller waits. Readers receive distinct samples in FIFO order. Thread status reports an approximated event-flag wait type 4 with no object ID.
+## GE
 
-`Execution::set_controller()` supplies PSP button bits and four unsigned analog coordinates. At every guest vblank, the controller samples that state independently of interrupt masking, writes the low 32 bits of guest microsecond time, and zeroes the reserved bytes. Digital mode reports neutral coordinates (128); analog mode reports the supplied coordinates. A waiting reader is written and made ready with `v0 = 1`, or the newest sample replaces the previous unread sample. Historical buffering, peeks, negative reads, latches, and additional periods are deferred. Input changes after a handoff affect a future sample. The core never reads host keyboard state or wall-clock time.
+- `sceGeSetCallback` (`0xA4FC06A4`) and `sceGeUnsetCallback` (`0x05DB22CE`): up to 16 callbacks. SIGNAL is unsupported.
+- `sceGeListEnQueue` (`0xAB49E76A`): 64 list slots executed FIFO. Stall zero means no stall; callback -1 means none. Non-null list arguments are unsupported.
+- `sceGeListUpdateStallAddr` (`0xE0D68148`): a list stops before the command at its stall address and blocks later lists.
+- `sceGeListSync` (`0x03444EB4`) and `sceGeDrawSync` (`0xB287BD61`): mode 1 polls (done 0, queued 1, running 2, stalled 3); mode 0 waits for END.
+- One command runs alongside each CPU instruction. The GE command budget equals `max_instructions` but is counted separately.
+- Commands: NOP, VADDR, IADDR, BASE, OFFSET_ADDR, JUMP, PRIM, FINISH, END, zero-block CLUT_LOAD, and the state registers from GU's reset list. Other commands fail.
+- FINISH runs the guest finish callback when interrupts are enabled and no callback is active. It disables interrupts and preemption until it returns, then restores the interrupted thread and its wait.
+- Drawing: one untextured 2D triangle or one integer clear sprite per PRIM, RGBA 8888, clipped to region and scissor. Unsupported state fails before any VRAM write.
+- Rasterization rules are provisional, pending hardware probes: pixel-center coverage, top-left edges, integer barycentric colors, and flat color from the last vertex.
+- `sceKernelCreateEventFlag` (`0x55C20A00`) and `sceKernelDeleteEventFlag` (`0xEF9E4C70`): create and delete only, for GU initialization.
+- Unsupported: textures, depth and stencil, blending, 3D transforms, VFPU, SIGNAL/CALL/RET, list cancellation, and saved GE contexts.
 
-`sceKernelCreateCallback` (`ThreadManForUser`, `0xE81CAF8F`) validates the guest name and function address and creates an object owned by the calling thread, with the common argument supplied in `a2`. `sceKernelRegisterExitCallback` (`LoadExecForUser`, `0x4AC57943`) selects that object for exit notifications. `sceKernelSleepThreadCB` (`ThreadManForUser`, `0x82826F70`) puts the caller in callback-enabled sleep, reported as wait type 1. Sleep does not finish execution while other threads wait.
+## Sources
 
-`Execution::request_exit()` queues a notification, retaining an early request until registration. It does not stop execution. At an instruction boundary, a notified owner in callback-enabled sleep becomes ready. The scheduler can preempt a lower-priority running thread, which is necessary when the SDK sample's rendering work keeps every controller read supplied with fresh data. The callback runs through the ordinary CPU interpreter on its owner's stack with `a0` equal to the notification count, `a1 = 0` for the exit argument, and `a2` equal to its common pointer. Notifications are consumed on entry. A private return sentinel restores the owner's complete CPU state and sleeping lifecycle after its return delay slot; entry and return clear the link bit. A nonzero callback result deletes the callback, matching [PPSSPP's callback return handling](https://github.com/hrydgard/ppsspp/blob/master/Core/HLE/sceKernelThread.cpp). Callback instructions consume the normal instruction budget. Nested callback-enabled sleep, other callback notification APIs, and waking sleep are unsupported.
+- PSPSDK headers and import tables: [thread](../third_party/pspsdk/src/user/pspthreadman.h), [interrupt](../third_party/pspsdk/src/user/pspintrman.h), [system memory](../third_party/pspsdk/src/user/pspsysmem.h), [display](../third_party/pspsdk/src/display/pspdisplay.h), [controller](../third_party/pspsdk/src/ctrl/pspctrl.h), [GE](../third_party/pspsdk/src/ge/pspge.h).
+- Bundled [pspautotests](../third_party/pspautotests/tests) expectations for observed hardware behavior.
+- [PPSSPP](https://github.com/hrydgard/ppsspp) as an implementation reference where hardware results are missing.
 
-The SDL frontend tracks key press/release events and clears held state on focus loss. Home queues a guest exit notification once per press. Escape and window close retain their existing immediate frontend-close behavior. The unmodified sample's callback sets `done`; main then calls `sceKernelExitGame`. The final image remains visible after that guest exit.
+## Tests
 
-## GE lists and rendering
-
-The initial GE path runs the project-owned [triangle sample](../homebrew/triangle/main.c) through the pinned PSPSDK GU implementation. The [GE header](../third_party/pspsdk/src/ge/pspge.h) and [import table](../third_party/pspsdk/src/ge/sceGe_user.S) define these `sceGe_user` services:
-
-- `sceGeSetCallback` (`0xA4FC06A4`) reads the 16-byte callback structure in `a0`, validates non-null signal/finish entries, and returns one of 16 callback IDs. `sceGeUnsetCallback` (`0x05DB22CE`) removes the ID in `a0`. Submissions retain a copy of their callback registration. SIGNAL execution remains unsupported.
-- `sceGeListEnQueue` (`0xAB49E76A`) takes list address, stall address, callback ID, and arguments pointer in `a0`–`a3`. List/stall pointers are aligned and normalized to physical addresses; stall zero means no stall, and callback ID -1 means no callbacks. Non-null context arguments are unsupported. There are 64 reusable list slots, with FIFO execution. Completed slots can be reused; their prior IDs then refer to the new submission.
-- `sceGeListUpdateStallAddr` (`0xE0D68148`) changes the live list's stall address using `a0` and `a1`. A list stops before fetching the command at that address. A stalled first list prevents later lists from executing.
-- `sceGeListSync` (`0x03444EB4`) takes list ID and mode in `a0`/`a1`; `sceGeDrawSync` (`0xB287BD61`) takes mode in `a0`. Mode 1 polls status: done 0, queued 1, running 2, or stalled 3. Mode 0 blocks until the selected list reaches END or every queued list reaches END, respectively, and wakes with zero. FINISH alone does not complete a list. Invalid IDs, pointers, modes, and unsupported arguments fail clearly.
-
-Commands execute incrementally, at most one alongside each CPU instruction. When every thread waits and GE work remains runnable, one command advances the guest clock by one microsecond without consuming CPU instructions. Otherwise idle time follows delay/vblank deadlines. The GE command limit is independent of the CPU instruction limit and uses the same configured `max_instructions` value. Both persist across display handoffs. This provisional scheduling bounds cyclic JUMP lists even during blocking synchronization. GE faults report list ID and command PC, plus the word if fetched. Guest termination captures the active framebuffer and does not drain pending lists.
-
-Executable commands are NOP, VADDR, IADDR state, BASE, OFFSET_ADDR state, JUMP, PRIM, FINISH, and END. Defined state registers from GU's reset list are retained; retaining texture or matrix state does not implement those features. Zero-block CLUT_LOAD is accepted for reset; actual CLUT uploads and unknown commands fail. JUMP supports the inline vertex data emitted by `sceGuGetMemory`. END requires a preceding FINISH.
-
-FINISH queues the low 16 bits of its ID and the registered common pointer. When interrupts are enabled and no callback is active, the kernel runs the guest finish entry through ordinary CPU instructions with `a0 = ID` and `a1 = common`. It uses the selected thread's stack, or a waiting thread if the last running thread exited. All-waiting execution can deliver the interrupt without waiting for a CPU wakeup. The kernel saves the complete CPU state and interrupted wait, disables interrupts on entry, and prevents nested callbacks and thread preemption until return. GE interrupt callbacks cannot block or exit their thread. Return restores the saved interrupt flag, registers, instruction addresses, stack pointer, and wait, clearing the link bit; the callback's return value is ignored. Delay, vblank, controller, and GE completions during the callback update its saved continuation without resuming it early. Existing sleeping exit callbacks keep their separate ownership and nonzero-return deletion behavior.
-
-Rendering supports one unindexed, untextured three-vertex `GU_TRANSFORM_2D` triangle per PRIM, with RGBA 8888 colors and either unsigned 16-bit or float positions. Float XY values must be finite and within +/-65535; Z is unused because depth operations are disabled. Color clears use a two-vertex integer GU sprite. RGB clears preserve the existing alpha; RGB/alpha clears replace it. The framebuffer uses RGBA 8888, the configured stride, and a mirrored 2 MiB VRAM offset. Region and scissor bounds clip to the 480 × 272 display. Unsupported formats, primitive counts, masks, depth writes, and enabled lighting, textures, culling, blending, tests, or other unsupported pipeline features fail before pixel writes. Full vertex and framebuffer ranges are validated, and all vertices are decoded, before drawing.
-
-Triangle coverage uses 1/16-pixel coordinates, pixel-center sampling, and a top-left shared-edge rule. Smooth colors use integer barycentric interpolation; flat colors use the last submitted vertex even with reversed winding. Degenerate triangles write nothing. Float XY conversion truncates to 1/16 pixel. These coverage and rounding rules are provisional: the tests establish this emulator's contract, while bit-exact PSP claims require hardware probes. Textures, depth/stencil operations, blending, general 3D transforms, VFPU, SIGNAL/CALL/RET, list cancellation/head insertion, and saved GE contexts remain unsupported.
-
-GU initialization also needs `sceKernelCreateEventFlag` (`ThreadManForUser`, `0x55C20A00`) and `sceKernelDeleteEventFlag` (`0xEF9E4C70`). Creation validates the name, attributes 0 or `0x200`, and a null options pointer, retains the initial bits, and returns a shared kernel object ID. Deletion validates and removes the ID. General event-flag wait/set services remain unsupported.
-
-## Verification
-
-The [execution tests](../src/runtime/tests/execution_test.cpp) compare every output byte of `cpu_alu`, `cpu_branch2`, `cpu_div`, `lsu`, `llsc`, `fpu_branch`, `fpu_branch_hazard`, `fpu`, `roundmode`, `rounding`, `fpu_nan`, and `fcr` at two load addresses. The LSU comparison adds the final blank line emitted by the guest source but omitted from its bundled expectation; the other outputs match their bundled expectations directly. The unmodified SDK Hello World [fixture](../src/runtime/tests/fixtures/README.md) must print exactly `Hello World\n` and exit successfully at two load addresses; it includes Newlib startup and heap cleanup. Guest-instruction tests also verify partition-free return values, distinct total/largest-free queries under fragmentation, register argument handling, startup arguments, faults, instruction budgets, synchronization services, time queries, and a delay that runs another guest thread before resuming the caller. [Arena tests](../src/runtime/tests/address_arena_test.cpp) cover aligned bounds and sizes, hole reuse with low/high placement, merging in every free order, and ranges ending at the top of the address space. [Kernel tests](../src/runtime/tests/kernel_test.cpp) cover the return sentinel reservation, invalid frees, shared stack/partition ownership, delay deadlines, deferred results, idle time, clock overflow, periodic interrupt deadlines, masking, link-bit invalidation, branch delay-slot preservation, and scheduling boundaries; [structure tests](../src/runtime/tests/guest_structures_test.cpp) check PSP field offsets, byte order, preservation of reserved fields, and rejection of incomplete output buffers without partial writes.
-
-The screen Hello World fixture must terminate at two load addresses and match an independently established full-frame bitmap. [Display tests](../src/runtime/tests/display_test.cpp) cover stride, byte order, opaque alpha, address aliases, deferred selections, disabled output, and invalid modes/ranges. Incremental execution tests cover running and idle vblanks, masked interrupts, termination between events, captured output, and a budget shared across handoffs. Separate [SDL frontend tests](../src/frontend/tests/window_test.cpp) use the offscreen software renderer to compare uploaded pixels and resizing, retain the window after guest exit, and close during active execution.
-
-The controller fixture must display neutral and changed analog values and every PSP button at two load addresses, then terminate through its guest exit callback. Controller tests cover the 16-byte ABI, guest timestamp wraparound, interrupt-independent sampling, invalid buffers without partial writes or sample consumption, and distinct samples for FIFO readers. Kernel tests also execute callback instructions to verify owner-thread arguments, common pointers, CPU-state restoration, persistent sleep, repeated notifications, deletion on nonzero return, and boundary-based priority selection. SDL tests cover key mapping, simultaneous input, opposite analog directions, release/focus loss, and Home followed by final-frame retention.
-
-The triangle fixture must match an analytic full-frame expectation at two load addresses and exit through guest FINISH and Home callbacks, including an early Home request. [GE tests](../src/runtime/tests/ge_test.cpp) cover stalls, FIFO/status/synchronization, slot reuse, callback arguments and deferral, address validation and fault context, command budgets, shade-mode and stride registers, aliases, region/scissor clipping of clears, float vertex decoding, and rejection before VRAM writes. [Rasterizer tests](../src/runtime/tests/rasterizer_test.cpp) cover smooth colors, winding, flat colors, degenerate triangles, shared-edge ownership, triangle clipping, and color-only versus color-and-alpha clears. Kernel tests cover interrupt wait restoration and completion races; execution tests bound GPU cycles while CPU threads wait and preserve vblank handoffs. SDL readback verifies the retained triangle at 2× scale.
+- Unit tests live next to each component under `src/*/tests/`.
+- Execution tests compare bundled hardware-test output and SDK fixture frames byte for byte at two load addresses; see the [fixtures](../src/runtime/tests/fixtures/README.md).
