@@ -77,7 +77,7 @@ public:
     std::size_t offset{0x400};
 };
 
-// Frozen glyph rows from the pinned SDK MSX font; independent of emulator output.
+// Frozen glyph rows from the guest's MSX debug font; independent of emulator output.
 Payload controller_text(std::span<const std::string_view> lines)
 {
     constexpr std::string_view characters = " -012578=ACDLRSTUXYacdefghilnopqrstuvw";
@@ -208,7 +208,7 @@ TEST(ExecutionTest, BundledLlscMatchesEntireHardwareOutputAtDifferentAddresses)
     }
 }
 
-TEST(ExecutionTest, SdkHelloWorldPrintsAndExitsAtDifferentAddresses)
+TEST(ExecutionTest, HelloWorldPrintsAndExitsAtDifferentAddresses)
 {
     std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/hello_world.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
@@ -709,7 +709,7 @@ TEST(ExecutionTest, GeCycleDuringBlockingListSyncYieldsAtVblankAndExhaustsItsOwn
     }
 }
 
-TEST(ExecutionTest, SdkTriangleRendersExpectedPixelsAndExitsThroughCallbacksAtDifferentAddresses)
+TEST(ExecutionTest, TriangleRendersExpectedPixelsAndExitsThroughCallbacksAtDifferentAddresses)
 {
     std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/triangle.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
@@ -756,7 +756,7 @@ TEST(ExecutionTest, SdkTriangleRendersExpectedPixelsAndExitsThroughCallbacksAtDi
     }
 }
 
-TEST(ExecutionTest, SdkTriangleRetainsOverallCpuBudgetWhileWaitingForHome)
+TEST(ExecutionTest, TriangleRetainsOverallCpuBudgetWhileWaitingForHome)
 {
     std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/triangle.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
@@ -782,13 +782,13 @@ TEST(ExecutionTest, SdkTriangleRetainsOverallCpuBudgetWhileWaitingForHome)
     EXPECT_TRUE(rendered);
 }
 
-TEST(ExecutionTest, SdkScreenHelloWorldRendersExpectedPixelsAtDifferentAddresses)
+TEST(ExecutionTest, ScreenHelloWorldRendersExpectedPixelsAtDifferentAddresses)
 {
     std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/screen_hello_world.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
     const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     const auto parsed = read_prx(payload);
-    // Independently established from the pinned SDK MSX font and seven-pixel
+    // Independently established from the guest's MSX debug font and seven-pixel
     // character advance in scr_printf.c; never derived from emulator output.
     constexpr std::array<std::string_view, 8> text{
         "#...#..........##.....##..................#...#.................##........#...",
@@ -832,7 +832,7 @@ TEST(ExecutionTest, SdkScreenHelloWorldRendersExpectedPixelsAtDifferentAddresses
     }
 }
 
-TEST(ExecutionTest, SdkControllerShowsInputAndExitsThroughGuestCallbackAtDifferentAddresses)
+TEST(ExecutionTest, ControllerShowsInputAndExitsThroughGuestCallbackAtDifferentAddresses)
 {
     std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/controller_basic.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
@@ -896,7 +896,7 @@ TEST(ExecutionTest, SdkControllerShowsInputAndExitsThroughGuestCallbackAtDiffere
     }
 }
 
-TEST(ExecutionTest, SdkControllerAcceptsExitRequestBeforeCallbackRegistration)
+TEST(ExecutionTest, ControllerAcceptsExitRequestBeforeCallbackRegistration)
 {
     std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/controller_basic.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());

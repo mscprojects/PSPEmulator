@@ -16,8 +16,7 @@ namespace psp::detail
 namespace
 {
 
-// GE command numbers, named as in the pinned PSPSDK's gu/guInternal.h. Each state
-// command stores its 24-bit argument in the register with the same number.
+// GE command numbers. Each state command stores its 24-bit argument in the register with the same number.
 constexpr std::uint32_t kNop = 0x00;
 constexpr std::uint32_t kVertexAddress = 0x01;
 constexpr std::uint32_t kIndexAddress = 0x02;
@@ -59,7 +58,7 @@ void validate_pointer(const Memory &memory, GuestAddress address)
     memory.validate_range(address, 4);
 }
 
-// Defined GE state registers, including GU's reset list. Retaining a register
+// Defined GE state registers, including those a standard GE reset writes. Retaining a register
 // does not enable its feature: draw() rejects unsupported active pipeline state.
 bool state_register(std::uint32_t command)
 {
@@ -326,7 +325,7 @@ void Ge::execute(List &list, std::uint32_t word)
     case kPrimitive:
         draw(value);
         return;
-    case kJump: // Includes sceGuGetMemory's inline vertex data.
+    case kJump: // Includes jumps over inline vertex data.
         list.pc = relative_address(value);
         validate_pointer(memory_, list.pc);
         return;

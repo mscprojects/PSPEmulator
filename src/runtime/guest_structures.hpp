@@ -29,7 +29,7 @@ enum class ThreadStatus : std::uint8_t
     Stopped = 16,
 };
 
-// SceKernelThreadInfo, as defined by PSPSDK's src/user/pspthreadman.h.
+// SceKernelThreadInfo.
 // The current runtime supports this 104-byte version only.
 struct GuestThreadInfo
 {
@@ -65,7 +65,7 @@ struct GuestMutexWorkArea
     std::array<GuestWord, 3> padding{};
 };
 
-// SceCtrlData from PSPSDK's pspctrl.h, including the optional second stick.
+// SceCtrlData, including the optional second stick.
 struct GuestControllerData
 {
     GuestWord timestamp;
@@ -77,7 +77,7 @@ struct GuestControllerData
     std::array<std::uint8_t, 4> reserved{};
 };
 
-// PspGeCallbackData from PSPSDK's ge/pspge.h: signal and finish handlers with their arguments.
+// PspGeCallbackData: signal and finish handlers with their arguments.
 struct GuestGeCallbackData
 {
     GuestWord signal_function;

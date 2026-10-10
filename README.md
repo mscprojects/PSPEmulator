@@ -5,8 +5,8 @@ An early PSP emulator: an Allegrex interpreter, a high-level PSP runtime, and an
 What runs today:
 
 - Bundled hardware tests `cpu_alu`, `cpu_branch2`, `cpu_div`, `lsu`, `llsc`, `fpu_branch`, `fpu_branch_hazard`, `fpu`, `roundmode`, `rounding`, `fpu_nan`, and `fcr`, matching their hardware output byte for byte.
-- Unmodified PSPSDK samples: console Hello World, screen Hello World, and the basic controller sample with its exit callback.
-- A project-owned GU sample that draws an RGB triangle through display lists and software rasterization.
+- Unmodified homebrew samples: console Hello World, screen Hello World, and a basic controller sample with its exit callback.
+- A project-owned sample that draws an RGB triangle through GE display lists and software rasterization.
 
 ## Build and test
 
@@ -15,7 +15,7 @@ Requirements:
 - Clang with C++23, CMake 3.20+, fmt, SDL3 3.4.2 development files, and GoogleTest.
 - A host with IEEE binary32 evaluation and floating-point environment support; CMake enables Clang's strict floating-point mode.
 - `just`, plus clang-format and clang-tidy for `just ci`.
-- Git submodules (`git submodule update --init --recursive`) and Git LFS for the SDK fixtures (`git lfs pull`).
+- Git submodules (`git submodule update --init --recursive`) and Git LFS for the homebrew fixtures (`git lfs pull`).
 
 ```sh
 just build   # Debug build (-O1) in build/
@@ -65,10 +65,10 @@ Optional; needs Ubuntu 24.04 x86_64, GNU Make, curl, tar, and sha256sum.
 
 ```sh
 just setup-pspdev   # pinned PSPDEV v20261001 into ~/.local/opt/pspdev, checksum-verified
-just homebrew       # SDK samples and the triangle into build-homebrew/
+just homebrew       # homebrew fixtures into build-homebrew/
 ```
 
-- Version, URL, and checksum are pinned in `justfile`; the PSPSDK submodule matches that release.
+- Version, URL, and checksum are pinned in `justfile`; the sample-source submodule matches that release.
 - Sources are copied into `build-homebrew/`, so the submodule stays clean.
 - The normal build and `just ci` do not need the PSP toolchain.
 - Fixture provenance and rebuild steps: [fixtures README](src/runtime/tests/fixtures/README.md).

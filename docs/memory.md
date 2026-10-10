@@ -29,6 +29,5 @@
 
 ## Sources
 
-- [PSPSDK GE header](../third_party/pspsdk/src/ge/pspge.h): 2 MiB EDRAM.
 - [`setframebuf` test](../third_party/pspautotests/tests/display/setframebuf.cpp): uses cached and uncached VRAM pointers.
 - [PPSSPP memory map](https://github.com/hrydgard/ppsspp/blob/master/Core/MemMap.cpp): address-view layout reference.

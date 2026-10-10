@@ -93,7 +93,7 @@ Services (`Kernel_Library`):
 - `sceKernelCpuSuspendIntr` (`0x092968F4`): disables delivery and returns the previous enable flag.
 - `sceKernelCpuResumeIntr` (`0x5F10D406`) and `sceKernelCpuResumeIntrWithSync` (`0x3B84732D`): restore bit 0 of `a0`; delivery waits for the next instruction boundary.
 - `sceKernelIsCpuIntrEnable` (`0xB55249D2`): current enable flag.
-- `sceKernelIsCpuIntrSuspended` (`0x47A0B729`): one when the whole `a0` word is zero, following [`suspended.expected`](../third_party/pspautotests/tests/intr/suspended.expected) rather than the PSPSDK comment.
+- `sceKernelIsCpuIntrSuspended` (`0x47A0B729`): one when the whole `a0` word is zero, following [`suspended.expected`](../third_party/pspautotests/tests/intr/suspended.expected).
 
 ## Partition memory
 
@@ -124,7 +124,7 @@ Services (`Kernel_Library`):
 - `sceCtrlSetSamplingMode` (`0x1F4011E6`): digital 0 (neutral sticks) or analog 1.
 - `sceCtrlReadBufferPositive` (`0x1F803938`): count 1 into an aligned 16-byte buffer. Returns a fresh sample, or waits for the next vblank sample. Readers are served FIFO, one sample each.
 - Samples are taken at every vblank, regardless of interrupt masking, with the low 32 bits of guest time as timestamp.
-- `sceKernelCreateCallback` (`0xE81CAF8F`), `sceKernelRegisterExitCallback` (`0x4AC57943`), and `sceKernelSleepThreadCB` (`0x82826F70`) support the SDK exit-callback pattern.
+- `sceKernelCreateCallback` (`0xE81CAF8F`), `sceKernelRegisterExitCallback` (`0x4AC57943`), and `sceKernelSleepThreadCB` (`0x82826F70`) support the standard exit-callback pattern.
 - `Execution::request_exit()` notifies the exit callback; an early request waits for registration. It never stops execution by itself.
 - The callback runs as guest code on its sleeping owner's stack with the notification count, zero, and its common pointer. A nonzero return deletes it, as in [PPSSPP](https://github.com/hrydgard/ppsspp/blob/master/Core/HLE/sceKernelThread.cpp).
 - Unsupported: historical buffers, peeks, negative reads, latches, other sampling periods, nested callback sleep, and other callback APIs.
@@ -136,20 +136,19 @@ Services (`Kernel_Library`):
 - `sceGeListUpdateStallAddr` (`0xE0D68148`): a list stops before the command at its stall address and blocks later lists.
 - `sceGeListSync` (`0x03444EB4`) and `sceGeDrawSync` (`0xB287BD61`): mode 1 polls (done 0, queued 1, running 2, stalled 3); mode 0 waits for END.
 - One command runs alongside each CPU instruction. The GE command budget equals `max_instructions` but is counted separately.
-- Commands: NOP, VADDR, IADDR, BASE, OFFSET_ADDR, JUMP, PRIM, FINISH, END, zero-block CLUT_LOAD, and the state registers from GU's reset list. Other commands fail.
+- Commands: NOP, VADDR, IADDR, BASE, OFFSET_ADDR, JUMP, PRIM, FINISH, END, zero-block CLUT_LOAD, and the state registers a standard GE reset writes. Other commands fail.
 - FINISH runs the guest finish callback when interrupts are enabled and no callback is active. It disables interrupts and preemption until it returns, then restores the interrupted thread and its wait.
 - Drawing: one untextured 2D triangle or one integer clear sprite per PRIM, RGBA 8888, clipped to region and scissor. Unsupported state fails before any VRAM write.
 - Rasterization rules are provisional, pending hardware probes: pixel-center coverage, top-left edges, integer barycentric colors, and flat color from the last vertex.
-- `sceKernelCreateEventFlag` (`0x55C20A00`) and `sceKernelDeleteEventFlag` (`0xEF9E4C70`): create and delete only, for GU initialization.
+- `sceKernelCreateEventFlag` (`0x55C20A00`) and `sceKernelDeleteEventFlag` (`0xEF9E4C70`): create and delete only, as graphics initialization needs.
 - Unsupported: textures, depth and stencil, blending, 3D transforms, VFPU, SIGNAL/CALL/RET, list cancellation, and saved GE contexts.
 
 ## Sources
 
-- PSPSDK headers and import tables: [thread](../third_party/pspsdk/src/user/pspthreadman.h), [system parameters](../third_party/pspsdk/src/utility/psputility_sysparam.h), [interrupt](../third_party/pspsdk/src/user/pspintrman.h), [system memory](../third_party/pspsdk/src/user/pspsysmem.h), [display](../third_party/pspsdk/src/display/pspdisplay.h), [controller](../third_party/pspsdk/src/ctrl/pspctrl.h), [GE](../third_party/pspsdk/src/ge/pspge.h).
 - Bundled [pspautotests](../third_party/pspautotests/tests) expectations for observed hardware behavior.
 - [PPSSPP](https://github.com/hrydgard/ppsspp) as an implementation reference where hardware results are missing.
 
 ## Tests
 
 - Unit tests live next to each component under `src/*/tests/`.
-- Execution tests compare bundled hardware-test output and SDK fixture frames byte for byte at two load addresses; see the [fixtures](../src/runtime/tests/fixtures/README.md).
+- Execution tests compare bundled hardware-test output and homebrew fixture frames byte for byte at two load addresses; see the [fixtures](../src/runtime/tests/fixtures/README.md).

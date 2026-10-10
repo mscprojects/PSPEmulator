@@ -35,7 +35,7 @@ Uint32 close_after_delay(void *, SDL_TimerID, Uint32)
 
 } // namespace
 
-TEST(WindowTest, RendersSdkPixelsWithNearestScalingAndPreservesAspectRatioAfterResize)
+TEST(WindowTest, RendersGuestPixelsWithNearestScalingAndPreservesAspectRatioAfterResize)
 {
     std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/screen_hello_world.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());

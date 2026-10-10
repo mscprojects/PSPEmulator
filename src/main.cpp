@@ -23,7 +23,7 @@ int main(int argc, char *argv[])
             throw std::invalid_argument(usage);
         }
         psp::ExecutionOptions options;
-        // SDK startup code corrupts its stack on a leading '/' without a PSP drive prefix,
+        // Guest startup code corrupts its stack on a leading '/' without a PSP drive prefix,
         // so the guest sees only the file name, independent of the host directory.
         options.arguments = {std::filesystem::path(argv[1]).filename().string()};
         bool window = false;
