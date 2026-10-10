@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime/kernel.hpp"
+#include "runtime/rasterizer.hpp"
 
 #include <array>
 #include <deque>
@@ -17,9 +18,9 @@ struct GeSubmission
     GuestAddress arguments;
 };
 
-// Incremental command processor and bounded software renderer. State registers
-// persist across lists. Only unindexed, untextured 2D triangles and clear sprites
-// are rendered; active unsupported features fail before modifying VRAM.
+// Incremental command processor. State registers persist across lists. Only unindexed,
+// untextured 2D triangles and clear sprites are passed to the rasterizer; active
+// unsupported features fail before modifying VRAM.
 class Ge
 {
     struct Callback
@@ -49,13 +50,6 @@ class Ge
         std::optional<std::uint32_t> list;
     };
 
-    struct Vertex
-    {
-        std::int32_t x;
-        std::int32_t y;
-        std::uint32_t color;
-    };
-
 public:
     Ge(Memory &memory, Kernel &kernel, std::uint64_t command_budget);
     std::uint32_t set_callback(GuestAddress address);
@@ -78,10 +72,7 @@ private:
     GuestAddress relative_address(std::uint32_t low) const;
     void execute(List &list, std::uint32_t word);
     void draw(std::uint32_t primitive);
-    Vertex read_vertex(GuestAddress address, bool floating) const;
-    void triangle(std::array<Vertex, 3> vertices);
-    void clear(const std::array<Vertex, 2> &vertices);
-    void write_pixel(int x, int y, std::uint32_t color, bool clear);
+    RasterVertex read_vertex(GuestAddress address, bool floating) const;
 
     Memory &memory_;
     Kernel &kernel_;
@@ -94,9 +85,6 @@ private:
     std::deque<Waiter> waiters_;
     std::array<std::uint32_t, 256> registers_{};
     GuestAddress vertices_{0};
-    GuestAddress framebuffer_{0};
-    std::uint32_t stride_{};
-    std::array<int, 4> clip_{}; // Inclusive left, top, right, bottom.
 };
 
 } // namespace psp::detail

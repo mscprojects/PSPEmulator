@@ -55,6 +55,7 @@ add_library(psp_core
     src/runtime/guest_io.cpp
     src/runtime/guest_structures.cpp
     src/runtime/kernel.cpp
+    src/runtime/rasterizer.cpp
     src/runtime/runtime.cpp
     src/runtime/syscall_dispatcher.cpp
 )

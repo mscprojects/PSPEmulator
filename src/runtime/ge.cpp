@@ -384,25 +384,27 @@ void Ge::draw(std::uint32_t primitive)
             throw std::runtime_error(fmt::format("Unsupported enabled GE feature 0x{:x}", command));
         }
     }
-    clip_ = {
-        std::max(static_cast<int>(registers_[kRegion1] & 1023), static_cast<int>(registers_[kScissor1] & 1023)),
-        std::max(static_cast<int>((registers_[kRegion1] >> 10) & 1023),
-                 static_cast<int>((registers_[kScissor1] >> 10) & 1023)),
-        std::min({479, static_cast<int>(registers_[kRegion2] & 1023), static_cast<int>(registers_[kScissor2] & 1023)}),
-        std::min({271, static_cast<int>((registers_[kRegion2] >> 10) & 1023),
-                  static_cast<int>((registers_[kScissor2] >> 10) & 1023)})};
-    stride_ = registers_[kFrameBufferWidth] & 0x7FCU;
-    framebuffer_ = GuestAddress{0x04000000U | (registers_[kFrameBufferPointer] & 0x1FFFF0U)};
-    if (stride_ == 0 || stride_ <= static_cast<std::uint32_t>(clip_[2]))
+    // Region and scissor bounds both clip to the 480 x 272 display.
+    const RenderTarget target{
+        .framebuffer = GuestAddress{0x04000000U | (registers_[kFrameBufferPointer] & 0x1FFFF0U)},
+        .stride = registers_[kFrameBufferWidth] & 0x7FCU,
+        .left = std::max(static_cast<int>(registers_[kRegion1] & 1023), static_cast<int>(registers_[kScissor1] & 1023)),
+        .top = std::max(static_cast<int>((registers_[kRegion1] >> 10) & 1023),
+                        static_cast<int>((registers_[kScissor1] >> 10) & 1023)),
+        .right = std::min(
+            {479, static_cast<int>(registers_[kRegion2] & 1023), static_cast<int>(registers_[kScissor2] & 1023)}),
+        .bottom = std::min({271, static_cast<int>((registers_[kRegion2] >> 10) & 1023),
+                            static_cast<int>((registers_[kScissor2] >> 10) & 1023)})};
+    if (target.stride == 0 || target.stride <= static_cast<std::uint32_t>(target.right))
     {
         throw std::runtime_error("GE framebuffer stride is too small");
     }
-    memory_.validate_range(framebuffer_, std::size_t{stride_} * 272 * 4);
+    memory_.validate_range(target.framebuffer, std::size_t{target.stride} * 272 * 4);
     const std::size_t vertex_size = floating ? 16 : 12;
     validate_pointer(memory_, vertices_);
     memory_.validate_range(vertices_, count * vertex_size);
     // Decode all input before any pixel write, including NaN/range validation.
-    std::array<Vertex, 3> decoded{};
+    std::array<RasterVertex, 3> decoded{};
     for (std::size_t index = 0; index < count; ++index)
     {
         decoded[index] =
@@ -410,16 +412,18 @@ void Ge::draw(std::uint32_t primitive)
     }
     if (clearing)
     {
-        clear({decoded[0], decoded[1]});
+        const auto channels =
+            (registers_[kClearMode] & 0x200U) != 0 ? ClearChannels::ColorAndAlpha : ClearChannels::Color;
+        draw_clear(memory_, target, {decoded[0], decoded[1]}, channels);
     }
     else
     {
-        triangle(decoded);
+        draw_triangle(memory_, target, decoded, registers_[kShadeMode] == 1 ? Shading::Smooth : Shading::Flat);
     }
     vertices_ = GuestAddress{vertices_.value_of() + static_cast<std::uint32_t>(count * vertex_size)};
 }
 
-Ge::Vertex Ge::read_vertex(GuestAddress address, bool floating) const
+RasterVertex Ge::read_vertex(GuestAddress address, bool floating) const
 {
     const auto coordinate = [&](std::uint32_t offset)
     {
@@ -436,85 +440,6 @@ Ge::Vertex Ge::read_vertex(GuestAddress address, bool floating) const
         return static_cast<std::int32_t>(value * 16); // Provisional 1/16-pixel truncation.
     };
     return {coordinate(4), coordinate(floating ? 8 : 6), memory_.read_u32(address)};
-}
-
-void Ge::triangle(std::array<Vertex, 3> vertices)
-{
-    const auto flat_color = vertices[2].color;
-    const auto edge = [](const Vertex &a, const Vertex &b, std::int32_t x, std::int32_t y)
-    { return std::int64_t{b.x - a.x} * (y - a.y) - std::int64_t{b.y - a.y} * (x - a.x); };
-    auto area = edge(vertices[0], vertices[1], vertices[2].x, vertices[2].y);
-    if (area == 0)
-    {
-        return;
-    }
-    if (area < 0)
-    {
-        std::swap(vertices[1], vertices[2]);
-        area = -area;
-    }
-    const auto top_left = [](const Vertex &a, const Vertex &b) { return b.y < a.y || (b.y == a.y && b.x > a.x); };
-    const std::array inclusive{top_left(vertices[1], vertices[2]), top_left(vertices[2], vertices[0]),
-                               top_left(vertices[0], vertices[1])};
-    // Pixel-center coverage with a top-left rule. Exact PSP subpixel coverage and
-    // fixed-point color-plane rounding require hardware probes in a later milestone.
-    for (int y = clip_[1]; y <= clip_[3]; ++y)
-    {
-        for (int x = clip_[0]; x <= clip_[2]; ++x)
-        {
-            const std::array weights{edge(vertices[1], vertices[2], x * 16 + 8, y * 16 + 8),
-                                     edge(vertices[2], vertices[0], x * 16 + 8, y * 16 + 8),
-                                     edge(vertices[0], vertices[1], x * 16 + 8, y * 16 + 8)};
-            if (weights[0] < 0 || weights[1] < 0 || weights[2] < 0 || (weights[0] == 0 && !inclusive[0]) ||
-                (weights[1] == 0 && !inclusive[1]) || (weights[2] == 0 && !inclusive[2]))
-            {
-                continue;
-            }
-            auto color = flat_color;
-            if (registers_[kShadeMode] == 1)
-            {
-                color = 0;
-                for (unsigned channel = 0; channel < 4; ++channel)
-                {
-                    std::int64_t value = 0;
-                    for (std::size_t vertex = 0; vertex < vertices.size(); ++vertex)
-                    {
-                        value += weights[vertex] * ((vertices[vertex].color >> (channel * 8)) & 255);
-                    }
-                    color |= static_cast<std::uint32_t>(value / area) << (channel * 8);
-                }
-            }
-            write_pixel(x, y, color, false);
-        }
-    }
-}
-
-void Ge::clear(const std::array<Vertex, 2> &vertices)
-{
-    const auto left = std::max(clip_[0], (std::min(vertices[0].x, vertices[1].x) + 15) / 16);
-    const auto top = std::max(clip_[1], (std::min(vertices[0].y, vertices[1].y) + 15) / 16);
-    const auto right = std::min(clip_[2] + 1, (std::max(vertices[0].x, vertices[1].x) + 15) / 16);
-    const auto bottom = std::min(clip_[3] + 1, (std::max(vertices[0].y, vertices[1].y) + 15) / 16);
-    for (int y = top; y < bottom; ++y)
-    {
-        for (int x = left; x < right; ++x)
-        {
-            write_pixel(x, y, vertices[1].color, true);
-        }
-    }
-}
-
-// Coordinates and the packed RGBA value are distinct fields of a pixel write.
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-void Ge::write_pixel(int x, int y, std::uint32_t color, bool clearing)
-{
-    const auto address = GuestAddress{framebuffer_.value_of() +
-                                      (static_cast<std::uint32_t>(y) * stride_ + static_cast<std::uint32_t>(x)) * 4};
-    if (clearing && (registers_[kClearMode] & 0x200U) == 0)
-    {
-        color = (color & 0xFFFFFFU) | (memory_.read_u32(address) & 0xFF000000U);
-    }
-    memory_.write_u32(address, color);
 }
 
 } // namespace psp::detail
