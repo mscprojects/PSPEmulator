@@ -90,6 +90,7 @@ if(BUILD_TESTING)
         src/runtime/tests/execution_test.cpp
         src/runtime/tests/guest_structures_test.cpp
         src/runtime/tests/kernel_test.cpp
+        src/runtime/tests/rasterizer_test.cpp
     )
     target_link_libraries(psp_tests PRIVATE psp_core GTest::gtest_main)
     target_compile_definitions(psp_tests PRIVATE

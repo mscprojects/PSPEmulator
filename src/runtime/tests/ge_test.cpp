@@ -235,7 +235,8 @@ TEST_F(GeTest, CyclicJumpIsBoundedEvenWithAllCpuThreadsWaiting)
     EXPECT_EQ(kernel.system_time(), 3U);
 }
 
-TEST_F(GeTest, SmoothTriangleUsesStrideAndRgbaOrderAndReversedWindingMatches)
+// Coverage, interpolation, and winding rules are tested directly in rasterizer_test.cpp.
+TEST_F(GeTest, ShadeModeAndFrameBufferWidthSelectRasterizerState)
 {
     vertex(0, 0, 0, 0xFF0000FF);
     vertex(1, 4, 0, 0xFF00FF00);
@@ -244,60 +245,15 @@ TEST_F(GeTest, SmoothTriangleUsesStrideAndRgbaOrderAndReversedWindingMatches)
     words.insert(words.end(), {0x04030003, 0x0F000000, 0x0C000000});
     submit(words);
     drain();
-    EXPECT_EQ(pixel(0, 0), 0xFF1F1FBFU); // weights 3/4,1/8,1/8
-    EXPECT_EQ(pixel(1, 1), 0xFF5F5F3FU);
-    EXPECT_EQ(pixel(3, 0), 0U);   // Diagonal belongs to the adjoining triangle.
-    EXPECT_EQ(pixel(480, 0), 0U); // Row padding is untouched.
-    const auto original = memory.read_bytes(GuestAddress{0x04000000}, std::size_t{512} * 272 * 4);
-    vertex(1, 0, 4, 0xFFFF0000);
-    vertex(2, 4, 0, 0xFF00FF00);
-    memory.write_bytes(GuestAddress{0x04000000}, Payload(original.size()));
-    submit(words);
-    drain();
-    EXPECT_EQ(memory.read_bytes(GuestAddress{0x04000000}, original.size()), original);
-}
-
-TEST_F(GeTest, FlatTriangleUsesLastVertexAndDegenerateTriangleDoesNotWrite)
-{
-    vertex(0, 0, 0, 1);
-    vertex(1, 0, 4, 2);
-    vertex(2, 4, 0, 0xAABBCCDD);
-    auto words = drawing();
+    EXPECT_EQ(pixel(0, 0), 0xFF1F1FBFU);
+    EXPECT_EQ(pixel(1, 1), 0xFF5F5F3FU); // The 512-pixel width addresses the second row.
+    EXPECT_EQ(pixel(480, 0), 0U);        // Row padding is untouched.
+    words = drawing();
     words.insert(words.end(), {0x50000000, 0x04030003, 0x0F000000, 0x0C000000});
     submit(words);
     drain();
-    EXPECT_EQ(pixel(0, 0), 0xAABBCCDDU);
-    const auto original = memory.read_bytes(GuestAddress{0x04000000}, std::size_t{512} * 272 * 4);
-    vertex(2, 0, 8, 3);
-    submit(words);
-    drain();
-    EXPECT_EQ(memory.read_bytes(GuestAddress{0x04000000}, original.size()), original);
-}
-
-TEST_F(GeTest, TwoTrianglesShareAnEdgeWithoutHolesOrDoubleOwnership)
-{
-    auto words = drawing();
-    words.insert(words.end(), {0x50000000, 0x04030003, 0x04030003, 0x0F000000, 0x0C000000});
-    vertex(0, 0, 0, 1);
-    vertex(1, 4, 0, 1);
-    vertex(2, 0, 4, 1);
-    vertex(3, 4, 0, 2);
-    vertex(4, 4, 4, 2);
-    vertex(5, 0, 4, 2);
-    submit(words);
-    drain();
-    for (unsigned y = 0; y < 5; ++y)
-        for (unsigned x = 0; x < 5; ++x)
-            EXPECT_EQ(pixel(x, y), x >= 4 || y >= 4 ? 0U : x + y < 3 ? 1U : 2U);
-    const auto original = memory.read_bytes(GuestAddress{0x04000000}, std::size_t{512} * 272 * 4);
-    // Reverse primitive submission order; double ownership would change edge pixels.
-    const auto first = memory.read_bytes(GuestAddress{0x08002000}, 36);
-    const auto second = memory.read_bytes(GuestAddress{0x08002024}, 36);
-    memory.write_bytes(GuestAddress{0x08002000}, second);
-    memory.write_bytes(GuestAddress{0x08002024}, first);
-    submit(words);
-    drain();
-    EXPECT_EQ(memory.read_bytes(GuestAddress{0x04000000}, original.size()), original);
+    EXPECT_EQ(pixel(0, 0), 0xFFFF0000U); // Flat shading uses the last vertex.
+    EXPECT_EQ(pixel(1, 1), 0xFFFF0000U);
 }
 
 TEST_F(GeTest, ClearClipsToRegionAndScissorAndRgbPreservesAlpha)
