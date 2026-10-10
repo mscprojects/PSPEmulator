@@ -30,10 +30,13 @@ TEST(PrxReaderTest, ReadsRelativeHeadersAndDecodedRelocations)
     const Payload contents(fixture.bytes.begin() + 0x100, fixture.bytes.begin() + 0x280);
     EXPECT_EQ(parsed.segments, (std::vector<PrxSegment>{{1, 0, 0x200, 5, 4, contents}}));
     ASSERT_EQ(parsed.relocation_tables.size(), 1U);
-    EXPECT_EQ(
-        parsed.relocation_tables.front().relocations,
-        (std::vector<PrxRelocation>{
-            {0x60, 2, 0, 0}, {0x6C, 2, 0, 0}, {0x70, 2, 0, 0}, {0x80, 2, 0, 0}, {0x8C, 2, 0, 0}, {0x90, 2, 0, 0}}));
+    EXPECT_EQ(parsed.relocation_tables.front().relocations,
+              (std::vector<PrxRelocation>{{0x60, PrxRelocationType::Mips32, 0, 0},
+                                          {0x6C, PrxRelocationType::Mips32, 0, 0},
+                                          {0x70, PrxRelocationType::Mips32, 0, 0},
+                                          {0x80, PrxRelocationType::Mips32, 0, 0},
+                                          {0x8C, PrxRelocationType::Mips32, 0, 0},
+                                          {0x90, PrxRelocationType::Mips32, 0, 0}}));
 }
 
 TEST(PrxReaderTest, NormalizesKernelModuleOffsetAndRejectsUninitializedModuleInformation)
@@ -68,8 +71,8 @@ TEST(PrxReaderTest, DecodesCrossSegmentIndicesWithoutChoosingAddresses)
     ASSERT_EQ(parsed.relocation_tables.size(), 1U);
     const auto &relocations = parsed.relocation_tables.front().relocations;
     ASSERT_EQ(relocations.size(), 8U);
-    EXPECT_EQ(relocations[6], (PrxRelocation{0x10, 2, 0, 1}));
-    EXPECT_EQ(relocations[7], (PrxRelocation{0, 2, 1, 0}));
+    EXPECT_EQ(relocations[6], (PrxRelocation{0x10, PrxRelocationType::Mips32, 0, 1}));
+    EXPECT_EQ(relocations[7], (PrxRelocation{0, PrxRelocationType::Mips32, 1, 0}));
 }
 
 TEST(PrxReaderTest, RejectsUnsupportedRelocationEncodingsBeforePreparation)

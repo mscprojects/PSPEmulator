@@ -35,7 +35,6 @@ constexpr std::size_t kElfHeaderSize = 52;
 constexpr std::size_t kProgramHeaderSize = 32;
 constexpr std::size_t kSectionHeaderSize = 40;
 constexpr std::size_t kRelocationSize = 8;
-constexpr std::size_t kModuleInfoSize = 52;
 constexpr std::uint32_t kModuleOffsetMask = 0x7FFFFFFF;
 constexpr std::uint32_t kElfMagic = 0x464C457F;
 constexpr std::uint8_t kElfClass32 = 1;
@@ -43,7 +42,6 @@ constexpr std::uint8_t kLittleEndianEncoding = 1;
 constexpr std::uint32_t kElfVersion = 1;
 constexpr std::uint16_t kPrxType = 0xFFA0;
 constexpr std::uint16_t kMipsMachine = 8;
-constexpr std::uint32_t kLoadSegment = 1;
 constexpr std::uint32_t kPspRelocations = 0x700000A0;
 constexpr std::uint32_t kCompressedPspRelocations = 0x700000A1;
 constexpr std::uint32_t kRelSection = 9;
@@ -77,7 +75,7 @@ std::vector<ProgramHeader> parse_segments(PayloadReader file)
         {
             throw std::invalid_argument("Compressed PSP relocations are unsupported");
         }
-        if (segment.type == kLoadSegment)
+        if (segment.type == kPrxLoadSegment)
         {
             if (segment.file_size > segment.memory_size)
             {
@@ -93,7 +91,7 @@ std::vector<ProgramHeader> parse_segments(PayloadReader file)
         }
         segments.push_back(segment);
     }
-    if (segments.front().type != kLoadSegment)
+    if (segments.front().type != kPrxLoadSegment)
     {
         throw std::invalid_argument("PRX must begin with a load segment containing module information");
     }
@@ -170,6 +168,22 @@ std::vector<RelocationRange> read_relocation_tables(PayloadReader file, std::spa
     return tables;
 }
 
+PrxRelocationType relocation_type(std::uint32_t raw)
+{
+    const auto type = static_cast<PrxRelocationType>(raw);
+    switch (type)
+    {
+    case PrxRelocationType::Mips16:
+    case PrxRelocationType::Mips32:
+    case PrxRelocationType::Mips26:
+    case PrxRelocationType::MipsHigh16:
+    case PrxRelocationType::MipsLow16:
+    case PrxRelocationType::MipsGpRelative16:
+        return type;
+    }
+    throw std::invalid_argument("Unsupported PSP relocation type");
+}
+
 // Decode records once; each table keeps its own HI16/LO16 pairing scope.
 std::vector<PrxRelocationTable> read_relocations(PayloadReader file, std::span<const ProgramHeader> segments)
 {
@@ -194,15 +208,11 @@ std::vector<PrxRelocationTable> read_relocations(PayloadReader file, std::span<c
             const auto patch_segment = (info >> 8) & 0xFFU;
             const auto base_segment = (info >> 16) & 0xFFU;
             if ((info >> 24) != 0 || patch_segment >= segments.size() || base_segment >= segments.size() ||
-                segments[patch_segment].type != kLoadSegment || segments[base_segment].type != kLoadSegment)
+                segments[patch_segment].type != kPrxLoadSegment || segments[base_segment].type != kPrxLoadSegment)
             {
                 throw std::invalid_argument("Invalid PSP relocation segment index");
             }
-            if (type != 1 && type != 2 && type != 4 && type != 5 && type != 6 && type != 7)
-            {
-                throw std::invalid_argument("Unsupported PSP relocation type");
-            }
-            table.relocations.push_back({offset, type, patch_segment, base_segment});
+            table.relocations.push_back({offset, relocation_type(type), patch_segment, base_segment});
         }
         tables.push_back(std::move(table));
     }
@@ -242,7 +252,7 @@ ParsedPrx read_prx(PayloadSpan bytes)
     // a kernel module. Convert it once to an offset within the first load segment.
     const auto module_file_offset = first.module_offset & kModuleOffsetMask;
     if (module_file_offset < first.file_offset || module_file_offset - first.file_offset > first.file_size ||
-        kModuleInfoSize > first.file_size - (module_file_offset - first.file_offset))
+        kPrxModuleInfoSize > first.file_size - (module_file_offset - first.file_offset))
     {
         throw std::invalid_argument("PRX module information is outside the first segment");
     }
@@ -251,7 +261,7 @@ ParsedPrx read_prx(PayloadSpan bytes)
     for (const auto &header : headers)
     {
         PrxSegment segment{header.type, header.virtual_address, header.memory_size, header.flags, header.alignment, {}};
-        if (header.type == kLoadSegment)
+        if (header.type == kPrxLoadSegment)
         {
             file.seek(header.file_offset);
             const auto contents = file.read_bytes(header.file_size);

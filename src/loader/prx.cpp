@@ -25,9 +25,7 @@ struct PendingHighRelocation
     std::size_t base_segment;
 };
 
-constexpr std::size_t kModuleInfoSize = 52;
 constexpr std::size_t kModuleNameSize = 28;
-constexpr std::uint32_t kLoadSegment = 1;
 constexpr std::uint32_t kExecutableSegment = 1;
 constexpr std::uint32_t kWordSize = 4;
 constexpr std::uint32_t kFunctionStubSize = 8;
@@ -52,7 +50,7 @@ GuestAddress checked_address(std::uint64_t value)
 // A zero-length range may sit exactly at the segment's end.
 bool contains(const LoadedSegment &segment, GuestAddress address, std::uint64_t size)
 {
-    if (segment.header.type != kLoadSegment || address.value_of() < segment.address.value_of())
+    if (segment.header.type != kPrxLoadSegment || address.value_of() < segment.address.value_of())
     {
         return false;
     }
@@ -88,7 +86,7 @@ std::vector<LoadedSegment> load_segments(Memory &memory, std::span<const PrxSegm
     for (const auto &segment : segments)
     {
         LoadedSegment loaded{segment, GuestAddress{0}};
-        if (segment.type == kLoadSegment)
+        if (segment.type == kPrxLoadSegment)
         {
             if (segment.virtual_address > memory_size || segment.memory_size > memory_size - segment.virtual_address)
             {
@@ -104,7 +102,7 @@ std::vector<LoadedSegment> load_segments(Memory &memory, std::span<const PrxSegm
             }
             for (const auto &other : loaded_segments)
             {
-                if (other.header.type == kLoadSegment && segment.memory_size != 0 && other.header.memory_size != 0 &&
+                if (other.header.type == kPrxLoadSegment && segment.memory_size != 0 && other.header.memory_size != 0 &&
                     static_cast<std::uint64_t>(loaded.address.value_of()) + segment.memory_size >
                         other.address.value_of() &&
                     static_cast<std::uint64_t>(other.address.value_of()) + other.header.memory_size >
@@ -136,7 +134,8 @@ void relocate(Memory &memory, std::span<const LoadedSegment> segments, const Prx
         const auto patch_segment = relocation.patch_segment;
         const auto base_segment = relocation.base_segment;
         if (patch_segment >= segments.size() || base_segment >= segments.size() ||
-            segments[patch_segment].header.type != kLoadSegment || segments[base_segment].header.type != kLoadSegment)
+            segments[patch_segment].header.type != kPrxLoadSegment ||
+            segments[base_segment].header.type != kPrxLoadSegment)
         {
             throw std::invalid_argument("Invalid PSP relocation segment index");
         }
@@ -146,7 +145,7 @@ void relocate(Memory &memory, std::span<const LoadedSegment> segments, const Prx
         {
             throw std::invalid_argument("PSP relocation exceeds its target segment");
         }
-        if (type != 2) // R_MIPS_32 permits an unaligned data word.
+        if (type != PrxRelocationType::Mips32) // A 32-bit data word may be unaligned.
         {
             require_word_aligned(address);
         }
@@ -154,23 +153,23 @@ void relocate(Memory &memory, std::span<const LoadedSegment> segments, const Prx
         const auto base = segments[base_segment].address.value_of();
         switch (type)
         {
-        case 1: // R_MIPS_16
+        case PrxRelocationType::Mips16:
             memory.write_u32(address,
                              (instruction & kInstructionUpperMask) | ((instruction + base) & kLowHalfwordMask));
             break;
-        case 2: // R_MIPS_32
+        case PrxRelocationType::Mips32:
             memory.write_u32(address, instruction + base);
             break;
-        case 4: // R_MIPS_26: preserve the J/JAL opcode while relocating the word target.
+        case PrxRelocationType::Mips26: // Preserve the J/JAL opcode while relocating the word target.
             require_word_aligned(segments[base_segment].address);
             // The encoded target counts words; the segment base is a byte address.
             memory.write_u32(address, (instruction & kJumpOpcodeMask) |
                                           (((instruction & kJumpTargetMask) + base / kWordSize) & kJumpTargetMask));
             break;
-        case 5: // R_MIPS_HI16: several LUI instructions can share one following LO16.
+        case PrxRelocationType::MipsHigh16: // Several LUI instructions can share one following LO16.
             pending.push_back({address, instruction, base_segment});
             break;
-        case 6: // R_MIPS_LO16
+        case PrxRelocationType::MipsLow16:
         {
             const auto low =
                 static_cast<std::int32_t>(std::bit_cast<std::int16_t>(static_cast<std::uint16_t>(instruction)));
@@ -190,9 +189,9 @@ void relocate(Memory &memory, std::span<const LoadedSegment> segments, const Prx
                              (instruction & kInstructionUpperMask) | ((instruction + base) & kLowHalfwordMask));
             break;
         }
-        case 7: // R_MIPS_GPREL16: already GP-relative; PSP leaves these words unchanged.
+        case PrxRelocationType::MipsGpRelative16: // Already GP-relative; PSP leaves these words unchanged.
             break;
-        default:
+        default: // ParsedPrx is a public value, so hand-built tables can hold any number.
             throw std::invalid_argument("Unsupported PSP relocation type");
         }
     }
@@ -225,7 +224,7 @@ std::string read_name(const Memory &memory, std::span<const LoadedSegment> segme
 PrxModule read_module(const Memory &memory, std::span<const LoadedSegment> segments, std::uint32_t module_offset)
 {
     const auto &segment = segments.front();
-    if (module_offset > segment.header.bytes.size() || kModuleInfoSize > segment.header.bytes.size() - module_offset)
+    if (module_offset > segment.header.bytes.size() || kPrxModuleInfoSize > segment.header.bytes.size() - module_offset)
     {
         throw std::invalid_argument("PRX module information is outside the first segment");
     }
@@ -328,7 +327,7 @@ std::vector<PrxImportLibrary> read_imports(const Memory &memory, std::span<const
 // Guest memory stays local until every stage succeeds, so failures expose no partial image.
 LoadedPrx prepare_prx(const ParsedPrx &prx, GuestAddress load_address, std::size_t memory_size)
 {
-    if (prx.segments.empty() || prx.segments.front().type != kLoadSegment)
+    if (prx.segments.empty() || prx.segments.front().type != kPrxLoadSegment)
     {
         throw std::invalid_argument("PRX must begin with a load segment containing module information");
     }
@@ -339,7 +338,7 @@ LoadedPrx prepare_prx(const ParsedPrx &prx, GuestAddress load_address, std::size
     auto image_end = load_address.value_of();
     for (const auto &segment : segments)
     {
-        if (segment.header.type == kLoadSegment)
+        if (segment.header.type == kPrxLoadSegment)
         {
             image_end = std::max(image_end, segment.address.value_of() + segment.header.memory_size);
         }
