@@ -95,6 +95,14 @@ if(BUILD_TESTING)
     )
     gtest_discover_tests(psp_tests)
 
+    # A fault after partial output must still print that output; cpu_alu needs about 3M instructions.
+    # The absolute PRX path also checks that host directories stay out of the guest's argv[0].
+    add_test(NAME pspemu.PrintsGuestOutputBeforeFault
+        COMMAND pspemu "${CMAKE_CURRENT_SOURCE_DIR}/third_party/pspautotests/tests/cpu/cpu_alu/cpu_alu.prx"
+            --max-instructions 2000000
+    )
+    set_tests_properties(pspemu.PrintsGuestOutputBeforeFault PROPERTIES PASS_REGULAR_EXPRESSION "test_ins: fffe000f")
+
     add_executable(psp_frontend_tests src/frontend/tests/window_test.cpp)
     target_link_libraries(psp_frontend_tests PRIVATE psp_frontend GTest::gtest_main)
     target_compile_definitions(psp_frontend_tests PRIVATE

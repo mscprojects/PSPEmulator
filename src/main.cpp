@@ -58,17 +58,29 @@ int main(int argc, char *argv[])
         }
         const psp::Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
         const auto prx = psp::read_prx(payload);
-        if (window)
+        psp::Execution execution(prx, options);
+        int exit_code = 0;
+        try
         {
-            psp::Execution execution(prx, options);
-            psp::frontend::Window display;
-            const auto exit_code = psp::frontend::run_windowed(execution, display);
-            fmt::print("{}", execution.output());
-            return exit_code;
+            if (window)
+            {
+                psp::frontend::Window display;
+                exit_code = psp::frontend::run_windowed(execution, display);
+            }
+            else
+            {
+                execution.run_to_completion();
+                exit_code = execution.result().exit_code;
+            }
         }
-        const auto result = psp::execute_prx(prx, options);
-        fmt::print("{}", result.output);
-        return result.exit_code;
+        catch (const std::exception &)
+        {
+            // Output captured before a fault often explains it.
+            fmt::print("{}", execution.output());
+            throw;
+        }
+        fmt::print("{}", execution.output());
+        return exit_code;
     }
     catch (const std::exception &error)
     {
