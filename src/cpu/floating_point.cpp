@@ -106,7 +106,7 @@ FloatingPointResult float_to_integer(std::uint32_t bits, unsigned mode)
 FloatingPointResult evaluate_floating_point(FloatingPointOperation operation, std::uint32_t left, std::uint32_t right,
                                             std::uint32_t control)
 {
-    const unsigned mode = control & 3U;
+    const unsigned mode = control & kFcrRoundingMode;
     switch (operation)
     {
     case FloatingPointOperation::Absolute:
@@ -182,7 +182,7 @@ FloatingPointResult evaluate_floating_point(FloatingPointOperation operation, st
     {
         bits = kQuietNan; // Invalid operations create a positive canonical NaN on PSP.
     }
-    if ((control & 0x01000000U) != 0 && (bits & kMagnitude) != 0 && (bits & kMagnitude) < 0x00800000U)
+    if ((control & kFcrFlushToZero) != 0 && (bits & kMagnitude) != 0 && (bits & kMagnitude) < 0x00800000U)
     {
         bits &= 0x80000000U;
         exceptions |= kUnderflow | kInexact;
@@ -190,13 +190,55 @@ FloatingPointResult evaluate_floating_point(FloatingPointOperation operation, st
     return {bits, exceptions};
 }
 
+FloatingPointComparison compare_floating_point(std::uint32_t left, std::uint32_t right, std::uint32_t predicate)
+{
+    const auto left_magnitude = left & kMagnitude;
+    const auto right_magnitude = right & kMagnitude;
+    // Quiet Allegrex compares accept both NaN encodings (including libc's 0x7FBFFFFF NAN).
+    const bool unordered = left_magnitude > kInfinity || right_magnitude > kInfinity;
+    const bool equal = !unordered && (left == right || (left_magnitude == 0 && right_magnitude == 0));
+    bool less = false;
+    if (!unordered && !equal)
+    {
+        if (((left ^ right) & 0x80000000U) != 0)
+        {
+            less = (left >> 31) != 0;
+        }
+        else if ((left >> 31) != 0)
+        {
+            less = left > right;
+        }
+        else
+        {
+            less = left < right;
+        }
+    }
+    const bool condition =
+        ((predicate & 1U) != 0 && unordered) || ((predicate & 2U) != 0 && equal) || ((predicate & 4U) != 0 && less);
+    return {condition, unordered && (predicate & 8U) != 0 ? kInvalid : 0U};
+}
+
 std::uint32_t floating_point_control_after(std::uint32_t control, std::uint32_t exceptions)
 {
-    if ((exceptions & (control >> 7) & 31U) != 0)
+    if ((exceptions & (control >> kFcrEnableShift) & kFcrExceptions) != 0)
     {
         throw std::runtime_error("Enabled Allegrex FPU exception: guest exception entry is unsupported");
     }
-    return (control & ~0x0001F000U) | (exceptions << 12) | (exceptions << 2);
+    return (control & ~(kFcrExceptions << kFcrCauseShift)) | (exceptions << kFcrCauseShift) |
+           (exceptions << kFcrFlagShift);
+}
+
+std::uint32_t floating_point_control_from_guest(std::uint32_t value)
+{
+    if ((value & kFcrUnimplementedCause) != 0)
+    {
+        throw std::runtime_error("FPU unimplemented-operation exception is unsupported");
+    }
+    if (((value >> kFcrCauseShift) & (value >> kFcrEnableShift) & kFcrExceptions) != 0)
+    {
+        throw std::runtime_error("Enabled Allegrex FPU exception in CTC1");
+    }
+    return value & kFcrWritable;
 }
 
 } // namespace psp

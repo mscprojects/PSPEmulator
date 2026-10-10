@@ -19,7 +19,6 @@ constexpr std::uint32_t kAfterDelaySlotOffset = 2 * kInstructionSize;
 constexpr std::uint32_t kWordAlignmentMask = 0b11U;
 constexpr std::uint32_t kJumpRegionMask = 0xF0000000U;
 constexpr std::uint32_t kJumpTargetMask = 0x03FFFFFFU;
-constexpr std::uint32_t kFloatingPointCondition = 1U << 23;
 constexpr unsigned kRegisterBits = 32;
 constexpr std::uint32_t kShiftCountMask = 0b11111U;
 constexpr std::uint32_t kLowHalfwordMask = 0xFFFFU;
@@ -50,7 +49,7 @@ std::optional<Syscall> Cpu::step(CpuState &state)
     // A caller may edit a saved state directly; $zero is always zero for operands.
     state.registers[0] = 0;
     ControlFlow flow{state.next_program_counter, GuestAddress{state.next_program_counter.value_of() + kInstructionSize},
-                     (state.floating_point_control & kFloatingPointCondition) != 0};
+                     (state.floating_point_control & kFcrCondition) != 0};
     std::optional<Syscall> syscall;
     if ((instruction & 0xFC00003FU) == 0x0000000CU)
     {
@@ -659,18 +658,9 @@ void Cpu::execute_cop1(CpuState &state, std::uint32_t instruction, ControlFlow &
     case 0x06: // CTC1
         if (source == 31)
         {
-            if ((state.registers[target] & 0x00020000U) != 0)
-            {
-                throw std::runtime_error("FPU unimplemented-operation exception is unsupported");
-            }
-            const auto value = state.registers[target];
-            if (((value >> 12) & (value >> 7) & 31U) != 0)
-            {
-                throw std::runtime_error("Enabled Allegrex FPU exception in CTC1");
-            }
-            state.floating_point_control = value & 0x0181FFFFU;
+            state.floating_point_control = floating_point_control_from_guest(state.registers[target]);
             // Unlike a comparison, CTC1 is immediately visible to a following branch.
-            flow.floating_point_branch_condition = (state.floating_point_control & kFloatingPointCondition) != 0;
+            flow.floating_point_branch_condition = (state.floating_point_control & kFcrCondition) != 0;
         }
         return;
     case 0x08: // BC1F, BC1T, BC1FL, BC1TL
@@ -713,42 +703,12 @@ void Cpu::execute_cop1(CpuState &state, std::uint32_t instruction, ControlFlow &
             state.floating_point_registers[(instruction >> 6) & 31U] = result.value;
             return;
         }
-        if ((instruction & 0x7F0U) == 0x30U)
+        if ((instruction & 0x7F0U) == 0x30U) // C.cond.S
         {
-            const auto left = state.floating_point_registers[source];
-            const auto right = state.floating_point_registers[target];
-            const auto left_magnitude = left & 0x7FFFFFFFU;
-            const auto right_magnitude = right & 0x7FFFFFFFU;
-            const bool left_nan = left_magnitude > 0x7F800000U;
-            const bool right_nan = right_magnitude > 0x7F800000U;
-            const bool unordered = left_nan || right_nan;
-            const auto predicate = instruction & 15U;
-            // Quiet Allegrex compares accept both NaN encodings (including libc's
-            // 0x7FBFFFFF NAN); the predicate's signaling bit selects invalid operation.
-            const bool invalid = unordered && (predicate & 8U) != 0;
-            const auto control = floating_point_control_after(state.floating_point_control, invalid ? 16U : 0U);
-            // Compare binary32 encodings directly, independent of host rounding/flush modes.
-            const bool equal = !unordered && (left == right || (left_magnitude == 0 && right_magnitude == 0));
-            bool less = false;
-            if (!unordered && !equal)
-            {
-                if (((left ^ right) & 0x80000000U) != 0)
-                {
-                    less = (left >> 31) != 0;
-                }
-                else if ((left >> 31) != 0)
-                {
-                    less = left > right;
-                }
-                else
-                {
-                    less = left < right;
-                }
-            }
-            const bool condition = ((predicate & 1U) != 0 && unordered) || ((predicate & 2U) != 0 && equal) ||
-                                   ((predicate & 4U) != 0 && less);
-            state.floating_point_control =
-                (control & ~kFloatingPointCondition) | (condition ? kFloatingPointCondition : 0U);
+            const auto comparison = compare_floating_point(state.floating_point_registers[source],
+                                                           state.floating_point_registers[target], instruction & 15U);
+            const auto control = floating_point_control_after(state.floating_point_control, comparison.exceptions);
+            state.floating_point_control = (control & ~kFcrCondition) | (comparison.condition ? kFcrCondition : 0U);
             return;
         }
         break;
