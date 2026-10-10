@@ -10,6 +10,8 @@
 
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace psp::detail
@@ -19,9 +21,26 @@ namespace psp::detail
 // operations. Services receive their own dependencies, never the Runtime.
 class SyscallDispatcher
 {
+    // Import libraries with implemented services, resolved once when stubs are bound.
+    enum class Library : std::uint8_t
+    {
+        Unsupported,
+        Ge,
+        Display,
+        ThreadManager,
+        KernelLibrary,
+        SystemMemory,
+        IoFileManager,
+        Stdio,
+        Utility,
+        Controller,
+        LoadExec,
+    };
+
     struct ImportBinding
     {
-        std::string library;
+        Library library;
+        std::string name;
         std::uint32_t nid;
     };
 
@@ -33,6 +52,7 @@ public:
 
 private:
     std::optional<std::uint32_t> dispatch(CpuState &state, const ImportBinding &binding);
+    static Library library_from_name(std::string_view name);
 
     Memory &memory_;
     Kernel &kernel_;

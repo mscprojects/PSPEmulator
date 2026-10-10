@@ -2,7 +2,11 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
+#include <array>
 #include <stdexcept>
+#include <string_view>
+#include <utility>
 
 namespace psp::detail
 {
@@ -20,7 +24,7 @@ SyscallDispatcher::SyscallDispatcher(Memory &memory, Kernel &kernel, GuestIo &io
             {
                 throw std::invalid_argument("Too many PRX imports");
             }
-            imports_.push_back({.library = library.name, .nid = function.nid});
+            imports_.push_back({.library = library_from_name(library.name), .name = library.name, .nid = function.nid});
             // JR schedules the return; its SYSCALL delay slot hands control to
             // the runtime after the CPU commits the return target.
             memory_.write_u32(function.stub_address, 0x03E00008);
@@ -46,7 +50,7 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
 {
     // PSP MIPS32 EABI integer arguments occupy a0-a7 (registers 4-11).
     const auto arg = [&](std::size_t index) { return state.registers.at(4 + index); };
-    if (binding.library == "sceGe_user")
+    if (binding.library == Library::Ge)
     {
         switch (binding.nid)
         {
@@ -70,7 +74,7 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
             break;
         }
     }
-    if (binding.library == "sceDisplay")
+    if (binding.library == Library::Display)
     {
         switch (binding.nid)
         {
@@ -87,7 +91,7 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
             break;
         }
     }
-    if (binding.library == "ThreadManForUser")
+    if (binding.library == Library::ThreadManager)
     {
         switch (binding.nid)
         {
@@ -166,7 +170,7 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
             break;
         }
     }
-    if (binding.library == "Kernel_Library")
+    if (binding.library == Library::KernelLibrary)
     {
         switch (binding.nid)
         {
@@ -190,7 +194,7 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
             break;
         }
     }
-    if (binding.library == "SysMemUserForUser")
+    if (binding.library == Library::SystemMemory)
     {
         switch (binding.nid)
         {
@@ -209,7 +213,7 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
             break;
         }
     }
-    if (binding.library == "IoFileMgrForUser")
+    if (binding.library == Library::IoFileManager)
     {
         switch (binding.nid)
         {
@@ -229,7 +233,7 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
             break;
         }
     }
-    if (binding.library == "StdioForUser")
+    if (binding.library == Library::Stdio)
     {
         switch (binding.nid)
         {
@@ -243,7 +247,7 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
             break;
         }
     }
-    if (binding.library == "sceUtility" && binding.nid == 0xA5DA2406) // sceUtilityGetSystemParamInt
+    if (binding.library == Library::Utility && binding.nid == 0xA5DA2406) // sceUtilityGetSystemParamInt
     {
         if (arg(0) != 6 && arg(0) != 7)
         {
@@ -253,7 +257,7 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
         memory_.write_u32(GuestAddress{arg(1)}, 0);
         return 0;
     }
-    if (binding.library == "sceCtrl")
+    if (binding.library == Library::Controller)
     {
         switch (binding.nid)
         {
@@ -267,7 +271,7 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
             break;
         }
     }
-    if (binding.library == "LoadExecForUser")
+    if (binding.library == Library::LoadExec)
     {
         switch (binding.nid)
         {
@@ -281,7 +285,26 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
             break;
         }
     }
-    throw std::runtime_error(fmt::format("Unsupported import {}:0x{:x}", binding.library, binding.nid));
+    throw std::runtime_error(fmt::format("Unsupported import {}:0x{:x}", binding.name, binding.nid));
+}
+
+// Calls into other libraries fail with their name and NID only if the guest invokes them.
+SyscallDispatcher::Library SyscallDispatcher::library_from_name(std::string_view name)
+{
+    constexpr std::array<std::pair<std::string_view, Library>, 10> libraries{{
+        {"sceGe_user", Library::Ge},
+        {"sceDisplay", Library::Display},
+        {"ThreadManForUser", Library::ThreadManager},
+        {"Kernel_Library", Library::KernelLibrary},
+        {"SysMemUserForUser", Library::SystemMemory},
+        {"IoFileMgrForUser", Library::IoFileManager},
+        {"StdioForUser", Library::Stdio},
+        {"sceUtility", Library::Utility},
+        {"sceCtrl", Library::Controller},
+        {"LoadExecForUser", Library::LoadExec},
+    }};
+    const auto library = std::ranges::find(libraries, name, &std::pair<std::string_view, Library>::first);
+    return library == libraries.end() ? Library::Unsupported : library->second;
 }
 
 } // namespace psp::detail
