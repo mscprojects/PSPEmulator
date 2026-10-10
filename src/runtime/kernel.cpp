@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -29,18 +28,14 @@ std::optional<std::uint64_t> vblank_after(std::uint64_t time)
     return start + offset;
 }
 
-} // namespace
-
-Kernel::Kernel(Memory &memory, GuestAddress load_address, std::size_t memory_size, std::span<const PrxSegment> segments,
-               GuestAddress global_pointer)
-    : memory_(memory), global_pointer_(global_pointer), return_address_(GuestAddress{0}), next_vblank_(vblank_after(0))
+// The arena spans from the end of the loaded image to the end of RAM.
+AddressArena allocation_arena(GuestAddress load_address, std::size_t memory_size, std::span<const PrxSegment> segments)
 {
     if (memory_size == 0 || memory_size > (std::uint64_t{1} << 32) - load_address.value_of())
     {
         throw std::invalid_argument("Kernel memory must fit in the 32-bit address space");
     }
     std::uint64_t begin = load_address.value_of();
-    const auto end = (begin + memory_size) & ~std::uint64_t{255};
     for (const auto &segment : segments)
     {
         if (segment.type == 1)
@@ -49,12 +44,17 @@ Kernel::Kernel(Memory &memory, GuestAddress load_address, std::size_t memory_siz
                                         segment.memory_size);
         }
     }
-    begin = (begin + 255) & ~std::uint64_t{255};
-    if (begin < end)
-    {
-        free_ranges_.push_back({begin, end});
-    }
-    return_address_ = GuestAddress{static_cast<std::uint32_t>(allocate_memory(256, AllocationDirection::Low).begin)};
+    return {begin, load_address.value_of() + memory_size};
+}
+
+} // namespace
+
+Kernel::Kernel(Memory &memory, GuestAddress load_address, std::size_t memory_size, std::span<const PrxSegment> segments,
+               GuestAddress global_pointer)
+    : memory_(memory), arena_(allocation_arena(load_address, memory_size, segments)), global_pointer_(global_pointer),
+      return_address_(GuestAddress{static_cast<std::uint32_t>(arena_.allocate(256, AllocationDirection::Low).begin)}),
+      next_vblank_(vblank_after(0))
+{
 }
 
 void Kernel::initialize(GuestAddress entry, std::span<const std::string> arguments)
@@ -87,7 +87,7 @@ std::uint32_t Kernel::create_thread(ThreadCreation creation)
         throw std::runtime_error("Thread stack must contain at least 512 bytes");
     }
     const auto stack =
-        GuestAddress{static_cast<std::uint32_t>(allocate_memory(creation.stack_size, AllocationDirection::High).begin)};
+        GuestAddress{static_cast<std::uint32_t>(arena_.allocate(creation.stack_size, AllocationDirection::High).begin)};
     CpuState state{.program_counter = creation.entry};
     state.registers[28] = global_pointer_.value_of();
     state.registers[31] = return_address_.value_of();
@@ -643,7 +643,7 @@ std::uint32_t Kernel::allocate_partition(PartitionAllocation allocation)
         throw std::runtime_error("Unsupported partition allocation");
     }
     const auto direction = allocation.type == 1 ? AllocationDirection::High : AllocationDirection::Low;
-    const auto range = allocate_memory(allocation.size, direction);
+    const auto range = arena_.allocate(allocation.size, direction);
     const auto id = next_id_++;
     blocks_.emplace(id, range);
     return id;
@@ -651,82 +651,23 @@ std::uint32_t Kernel::allocate_partition(PartitionAllocation allocation)
 
 void Kernel::free_partition(std::uint32_t id)
 {
-    const auto range = blocks_.at(id);
-    auto position =
-        std::lower_bound(free_ranges_.begin(), free_ranges_.end(), range.begin,
-                         [](const MemoryRange &free, std::uint64_t address) { return free.begin < address; });
-    position = free_ranges_.insert(position, range);
-    if (position != free_ranges_.begin() && std::prev(position)->end == position->begin)
-    {
-        std::prev(position)->end = position->end;
-        position = std::prev(free_ranges_.erase(position));
-    }
-    if (std::next(position) != free_ranges_.end() && position->end == std::next(position)->begin)
-    {
-        position->end = std::next(position)->end;
-        free_ranges_.erase(std::next(position));
-    }
+    arena_.free(blocks_.at(id));
     blocks_.erase(id);
 }
 
 std::uint32_t Kernel::free_memory_size() const
 {
-    std::uint64_t total = 0;
-    for (const auto &range : free_ranges_)
-    {
-        total += range.end - range.begin;
-    }
-    return static_cast<std::uint32_t>(total);
+    return static_cast<std::uint32_t>(arena_.free_size());
 }
 
 std::uint32_t Kernel::largest_free_memory_size() const
 {
-    std::uint64_t largest = 0;
-    for (const auto &range : free_ranges_)
-    {
-        largest = std::max(largest, range.end - range.begin);
-    }
-    return static_cast<std::uint32_t>(largest);
+    return static_cast<std::uint32_t>(arena_.largest_free_size());
 }
 
 GuestAddress Kernel::block_address(std::uint32_t id) const
 {
     return GuestAddress{static_cast<std::uint32_t>(blocks_.at(id).begin)};
-}
-
-Kernel::MemoryRange Kernel::allocate_memory(std::uint32_t size, AllocationDirection direction)
-{
-    const auto aligned_size = (static_cast<std::uint64_t>(size) + 255) & ~std::uint64_t{255};
-    if (size == 0)
-    {
-        throw std::runtime_error("Guest allocation size must be positive");
-    }
-    for (std::size_t offset = 0; offset < free_ranges_.size(); ++offset)
-    {
-        const auto index = direction == AllocationDirection::Low ? offset : free_ranges_.size() - 1 - offset;
-        auto &range = free_ranges_[index];
-        if (aligned_size > range.end - range.begin)
-        {
-            continue;
-        }
-        MemoryRange allocation{};
-        if (direction == AllocationDirection::Low)
-        {
-            allocation = {range.begin, range.begin + aligned_size};
-            range.begin = allocation.end;
-        }
-        else
-        {
-            allocation = {range.end - aligned_size, range.end};
-            range.end = allocation.begin;
-        }
-        if (range.begin == range.end)
-        {
-            free_ranges_.erase(free_ranges_.begin() + static_cast<std::ptrdiff_t>(index));
-        }
-        return allocation;
-    }
-    throw std::runtime_error("Guest memory exhausted");
 }
 
 void Kernel::place_arguments(Thread &thread, PayloadSpan arguments)

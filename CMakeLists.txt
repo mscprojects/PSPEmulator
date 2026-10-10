@@ -45,6 +45,7 @@ add_library(psp_core
     src/cpu/cpu.cpp
     src/cpu/floating_point.cpp
     src/memory/memory.cpp
+    src/runtime/address_arena.cpp
     src/loader/prx_reader.cpp
     src/loader/prx.cpp
     src/runtime/controller.cpp
@@ -81,7 +82,8 @@ if(BUILD_TESTING)
         src/cpu/tests/cpu_fpu_test.cpp
         src/loader/tests/prx_test.cpp
         src/loader/tests/prx_reader_test.cpp
-        src/runtime/tests/display_test.cpp
+        src/runtime/tests/address_arena_test.cpp
+    src/runtime/tests/display_test.cpp
         src/runtime/tests/controller_test.cpp
         src/runtime/tests/ge_test.cpp
         src/runtime/tests/execution_test.cpp

@@ -2,6 +2,7 @@
 
 #include "cpu/cpu_state.hpp"
 #include "loader/prx_reader.hpp"
+#include "runtime/address_arena.hpp"
 #include "runtime/guest_structures.hpp"
 
 #include <deque>
@@ -84,12 +85,6 @@ public:
     };
 
 private:
-    enum class AllocationDirection : std::uint8_t
-    {
-        Low,
-        High,
-    };
-
     enum class Lifecycle : std::uint8_t
     {
         Created,
@@ -129,12 +124,6 @@ private:
     {
         std::uint32_t count;
         std::uint32_t maximum;
-    };
-
-    struct MemoryRange
-    {
-        std::uint64_t begin;
-        std::uint64_t end;
     };
 
 public:
@@ -214,9 +203,6 @@ public:
     GuestAddress block_address(std::uint32_t id) const;
 
 private:
-    // Thread stacks and partition blocks share address-ordered free ranges.
-    // Allocations use 256-byte alignment; only partition blocks can be freed.
-    MemoryRange allocate_memory(std::uint32_t size, AllocationDirection direction);
     void place_arguments(Thread &thread, PayloadSpan arguments);
     void wake_delayed_threads();
     void wake_callbacks();
@@ -228,8 +214,9 @@ private:
     void validate_mutex_count(const GuestMutexWorkArea &work_area, std::uint32_t count) const;
 
     Memory &memory_;
-    std::vector<MemoryRange> free_ranges_;
-    std::map<std::uint32_t, MemoryRange> blocks_;
+    // Thread stacks and partition blocks share one arena; only partition blocks can be freed.
+    AddressArena arena_;
+    std::map<std::uint32_t, AddressRange> blocks_;
     std::uint32_t next_id_{1};
     GuestAddress global_pointer_;
     GuestAddress return_address_;

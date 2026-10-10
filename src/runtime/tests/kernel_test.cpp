@@ -3,7 +3,6 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <array>
 #include <limits>
 #include <stdexcept>
@@ -452,85 +451,6 @@ TEST(KernelTest, HeapAndStacksShareAnArenaAndFailedAllocationsPreserveCapacity)
     EXPECT_THROW(kernel.allocate_partition({2, 1, 1}), std::runtime_error);
 }
 
-TEST(KernelTest, PartitionHolesAreReusedFromLowestAndHighestAddresses)
-{
-    Memory memory(GuestAddress{0x1000}, 1280);
-    Kernel kernel(memory, GuestAddress{0x1000}, 1280, {}, GuestAddress{0});
-    const auto first = kernel.allocate_partition({2, 0, 1});
-    const auto second = kernel.allocate_partition({2, 0, 1});
-    const auto third = kernel.allocate_partition({2, 0, 1});
-    const auto fourth = kernel.allocate_partition({2, 0, 1});
-    kernel.free_partition(first);
-    kernel.free_partition(third);
-    EXPECT_EQ(kernel.free_memory_size(), 512U);
-    EXPECT_EQ(kernel.largest_free_memory_size(), 256U);
-    EXPECT_THROW(kernel.allocate_partition({2, 0, 512}), std::runtime_error);
-    EXPECT_EQ(kernel.free_memory_size(), 512U);
-
-    const auto low = kernel.allocate_partition({2, 0, 1});
-    const auto high = kernel.allocate_partition({2, 1, 1});
-    EXPECT_EQ(kernel.block_address(low), GuestAddress{0x1100});
-    EXPECT_EQ(kernel.block_address(high), GuestAddress{0x1300});
-    EXPECT_EQ(kernel.block_address(second), GuestAddress{0x1200});
-    EXPECT_EQ(kernel.block_address(fourth), GuestAddress{0x1400});
-    EXPECT_EQ(kernel.free_memory_size(), 0U);
-    EXPECT_EQ(kernel.largest_free_memory_size(), 0U);
-    EXPECT_THROW(kernel.block_address(first), std::out_of_range);
-    EXPECT_THROW(kernel.block_address(third), std::out_of_range);
-    EXPECT_NE(low, first);
-    EXPECT_NE(high, third);
-}
-
-TEST(KernelTest, AllocationSkipsHolesTooSmallForTheAlignedRequest)
-{
-    for (const std::uint32_t type : {0U, 1U})
-    {
-        SCOPED_TRACE(type);
-        Memory memory(GuestAddress{0x1000}, 1792);
-        Kernel kernel(memory, GuestAddress{0x1000}, 1792, {}, GuestAddress{0});
-        const auto low = kernel.allocate_partition({2, 0, 1});
-        kernel.allocate_partition({2, 0, 1});
-        const auto middle = kernel.allocate_partition({2, 0, 512});
-        kernel.allocate_partition({2, 0, 1});
-        const auto high = kernel.allocate_partition({2, 0, 1});
-        kernel.free_partition(low);
-        kernel.free_partition(middle);
-        kernel.free_partition(high);
-        const auto block = kernel.allocate_partition({2, type, 257});
-        EXPECT_EQ(kernel.block_address(block), GuestAddress{0x1300});
-        EXPECT_EQ(kernel.free_memory_size(), 512U);
-        EXPECT_EQ(kernel.largest_free_memory_size(), 256U);
-    }
-}
-
-TEST(KernelTest, FreeingBlocksInAnyOrderRecoversOneContiguousRange)
-{
-    std::array<unsigned, 4> order{0, 1, 2, 3};
-    do
-    {
-        SCOPED_TRACE(testing::PrintToString(order));
-        Memory memory(GuestAddress{0x1000}, 1280);
-        Kernel kernel(memory, GuestAddress{0x1000}, 1280, {}, GuestAddress{0});
-        std::array<std::uint32_t, 4> blocks{};
-        for (auto &block : blocks)
-        {
-            block = kernel.allocate_partition({2, 0, 1});
-        }
-        for (std::size_t index = 0; index < order.size(); ++index)
-        {
-            kernel.free_partition(blocks[order[index]]);
-            EXPECT_EQ(kernel.free_memory_size(), (index + 1) * 256);
-        }
-        EXPECT_EQ(kernel.largest_free_memory_size(), 1024U);
-        const auto whole = kernel.allocate_partition({2, 0, 1024});
-        EXPECT_EQ(kernel.block_address(whole), GuestAddress{0x1100});
-        EXPECT_EQ(kernel.free_memory_size(), 0U);
-        kernel.free_partition(whole);
-        EXPECT_EQ(kernel.free_memory_size(), 1024U);
-        EXPECT_EQ(kernel.largest_free_memory_size(), 1024U);
-    } while (std::next_permutation(order.begin(), order.end()));
-}
-
 TEST(KernelTest, InvalidFreesAndAllocationSizesLeaveLiveBlocksIntact)
 {
     Memory memory(GuestAddress{0x1000}, 1280);
@@ -587,12 +507,7 @@ TEST(KernelTest, AllocationPreservesAddressesAtTheEndOfTheGuestAddressSpace)
     Kernel kernel(memory, GuestAddress{0xFFFFFB00}, 1280, {}, GuestAddress{0});
     const auto high = kernel.allocate_partition({2, 1, 1});
     EXPECT_EQ(kernel.block_address(high), GuestAddress{0xFFFFFF00});
-    kernel.free_partition(high);
-    const auto whole = kernel.allocate_partition({2, 0, 1024});
-    EXPECT_EQ(kernel.block_address(whole), GuestAddress{0xFFFFFC00});
-    EXPECT_EQ(kernel.free_memory_size(), 0U);
-    kernel.free_partition(whole);
-    EXPECT_EQ(kernel.largest_free_memory_size(), 1024U);
+    EXPECT_EQ(kernel.free_memory_size(), 768U);
     EXPECT_THROW(Kernel(memory, GuestAddress{0xFFFFFB00}, 1281, {}, GuestAddress{0}), std::invalid_argument);
     EXPECT_THROW(Kernel(memory, GuestAddress{0xFFFFFB00}, std::numeric_limits<std::size_t>::max(), {}, GuestAddress{0}),
                  std::invalid_argument);
