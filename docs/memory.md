@@ -25,9 +25,9 @@
 - Failed writes and caller-buffer reads change nothing. Zero-length operations are no-ops.
 - Strings stop at the first NUL and need not have their full maximum length mapped.
 - Cached and uncached views share bytes, so they are always coherent.
-- Not modeled: caches, privilege checks, scratchpad, hardware registers, and the extra VRAM mirrors probed by [`gpu/transfer/mirrors`](../third_party/pspautotests/tests/gpu/transfer/mirrors.cpp).
+- Not modeled: caches, privilege checks, scratchpad, hardware registers, and the extra VRAM mirrors probed by [`gpu/transfer/mirrors`](/third_party/pspautotests/tests/gpu/transfer/mirrors.cpp).
 
 ## Sources
 
-- [`setframebuf` test](../third_party/pspautotests/tests/display/setframebuf.cpp): uses cached and uncached VRAM pointers.
+- [`setframebuf` test](/third_party/pspautotests/tests/display/setframebuf.cpp): uses cached and uncached VRAM pointers.
 - [PPSSPP memory map](https://github.com/hrydgard/ppsspp/blob/master/Core/MemMap.cpp): address-view layout reference.

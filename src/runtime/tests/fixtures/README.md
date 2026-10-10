@@ -11,18 +11,18 @@ Prebuilt PRXs that let the test suite run without the PSP toolchain.
 
 ## Fixtures
 
-- `hello_world.prx`: unmodified SDK [PRX template](../../../../third_party/pspsdk/src/samples/template/prx_template/main.c).
+- `hello_world.prx`: unmodified SDK [PRX template](/third_party/pspsdk/src/samples/template/prx_template/main.c).
   - SHA-256 `c39b124b2cd85014bed9082b8f197c6f93b32ac7f5e38bf859ce1bcc98a31d78`.
   - Must print exactly `Hello World\n` and exit with code zero within one million instructions.
   - GCC turns its `printf` into `puts`, so it exercises Newlib stream output and cleanup, not formatting.
-- `screen_hello_world.prx`: unmodified SDK [screen ELF template](../../../../third_party/pspsdk/src/samples/template/elf_template/main.c), built as a PRX.
+- `screen_hello_world.prx`: unmodified SDK [screen ELF template](/third_party/pspsdk/src/samples/template/elf_template/main.c), built as a PRX.
   - SHA-256 `9458a58f4fec26f497670d901b5289e08a1cd962f3e73ad3daabda9bcdef7f0c`.
-  - Must exit within two million instructions and match a full-frame bitmap derived from the SDK [MSX font](../../../../third_party/pspsdk/src/debug/font.c) and [7-pixel advance](../../../../third_party/pspsdk/src/debug/scr_printf.c), independent of emulator output.
-- `controller_basic.prx`: unmodified SDK [controller sample](../../../../third_party/pspsdk/src/samples/controller/basic/main.c).
+  - Must exit within two million instructions and match a full-frame bitmap derived from the SDK [MSX font](/third_party/pspsdk/src/debug/font.c) and [7-pixel advance](/third_party/pspsdk/src/debug/scr_printf.c), independent of emulator output.
+- `controller_basic.prx`: unmodified SDK [controller sample](/third_party/pspsdk/src/samples/controller/basic/main.c).
   - SHA-256 `c4f5c88809321de3b545d48fc7598b0e5c7fe115cc7c609372b98137d35ae165`.
   - Must show neutral and changed stick values and every button using frozen font rows, then exit through its guest exit callback, including after an early exit request.
   - The sample's `Cicle pressed` spelling is preserved.
-- `triangle.prx`: project-owned [triangle sample](../../../../homebrew/triangle/main.c) with its [Makefile](../../../../homebrew/triangle/Makefile).
+- `triangle.prx`: project-owned [triangle sample](/homebrew/triangle/main.c) with its [Makefile](/homebrew/triangle/Makefile).
   - SHA-256 `00db51e3ce2bb692a9af53f76fbbb13cc44987cffa45e472a4e32d612a2cc7ed`.
   - Draws red, green, and blue vertices at (240,40), (80,232), and (400,232) and submits FINISH ID 7.
   - Must match an analytic scanline expectation and exit only after its guest finish callback, with Home before and after rendering.
@@ -46,5 +46,5 @@ just test
 
 ## Licenses
 
-- SDK code: [PSPSDK license](../../../../third_party/pspsdk/LICENSE), also reproduced in [COPYING.PSPSDK](COPYING.PSPSDK) for binary redistribution.
-- Linked Newlib and GCC runtime code: [COPYING.NEWLIB](COPYING.NEWLIB), [COPYING3](COPYING3), and [COPYING.RUNTIME](COPYING.RUNTIME), from the revisions above.
+- SDK code: [PSPSDK license](/third_party/pspsdk/LICENSE), also reproduced in [COPYING.PSPSDK](/src/runtime/tests/fixtures/COPYING.PSPSDK) for binary redistribution.
+- Linked Newlib and GCC runtime code: [COPYING.NEWLIB](/src/runtime/tests/fixtures/COPYING.NEWLIB), [COPYING3](/src/runtime/tests/fixtures/COPYING3), and [COPYING.RUNTIME](/src/runtime/tests/fixtures/COPYING.RUNTIME), from the revisions above.

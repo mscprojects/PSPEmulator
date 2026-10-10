@@ -71,11 +71,11 @@ just homebrew       # homebrew fixtures into build-homebrew/
 - Version, URL, and checksum are pinned in `justfile`; the sample-source submodule matches that release.
 - Sources are copied into `build-homebrew/`, so the submodule stays clean.
 - The normal build and `just ci` do not need the PSP toolchain.
-- Fixture provenance and rebuild steps: [fixtures README](src/runtime/tests/fixtures/README.md).
+- Fixture provenance and rebuild steps: [fixtures README](/src/runtime/tests/fixtures/README.md).
 
 ## Documentation
 
-- [Runtime and syscall handling](docs/runtime.md): components, services, scheduling, display, controller, and GE.
-- [Allegrex CPU reference](docs/cpu-reference.md): instruction sources and CPU behavior.
-- [Guest memory](docs/memory.md): address layout and access rules.
+- [Runtime and syscall handling](/docs/runtime.md): components, services, scheduling, display, controller, and GE.
+- [Allegrex CPU reference](/docs/cpu-reference.md): instruction sources and CPU behavior.
+- [Guest memory](/docs/memory.md): address layout and access rules.
 - Tests live next to their code under `src/*/tests/`.

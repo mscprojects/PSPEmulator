@@ -16,8 +16,8 @@
 Each component has one header and one source file. None receives a `Runtime&`.
 
 - `Runtime`: owns the components, steps the selected thread, enforces the instruction budget, and is the only code that advances guest time.
-- `Cpu`: executes one Allegrex instruction on a supplied `CpuState`; see [CPU reference](cpu-reference.md).
-- `Memory`: RAM, VRAM, and address aliases; see [guest memory](memory.md).
+- `Cpu`: executes one Allegrex instruction on a supplied `CpuState`; see [CPU reference](/docs/cpu-reference.md).
+- `Memory`: RAM, VRAM, and address aliases; see [guest memory](/docs/memory.md).
 - `Kernel`: threads, scheduling, guest clock, vblank timing, interrupts, callbacks, sync objects, and partition block IDs.
 - `AddressArena`: free guest address ranges shared by thread stacks and partition blocks.
 - `SyscallDispatcher`: binds imports and maps guest registers to component calls.
@@ -47,7 +47,7 @@ Each component has one header and one source file. None receives a `Runtime&`.
 - Equal deadlines wake in delay order.
 - When a delay ends on a vblank edge, the vblank handoff happens first; the thread wakes before the next guest instruction.
 - Execution ends when no running, ready, or waiting thread remains, or when the guest calls `sceKernelExitGame`.
-- Unsupported: equal-priority time slicing, timeouts, blocking mutex and semaphore waits, and short-delay hardware granularity ([`delayzero`](../third_party/pspautotests/tests/threads/scheduling/delayzero.c)).
+- Unsupported: equal-priority time slicing, timeouts, blocking mutex and semaphore waits, and short-delay hardware granularity ([`delayzero`](/third_party/pspautotests/tests/threads/scheduling/delayzero.c)).
 
 Services (`ThreadManForUser`):
 
@@ -85,7 +85,7 @@ I/O and system parameters:
 
 - Vblank is the only interrupt source (interrupt 30). Edge n occurs at n × 1001000/60 µs and is seen at the first whole microsecond at or after it.
 - Edges while interrupts are masked coalesce into one pending interrupt, delivered at the next instruction boundary once enabled and a thread is running.
-- Delivery is handled on the host: it clears the link bit (as the [`llsc` test](../third_party/pspautotests/tests/cpu/lsu/llsc.c) observes) and preserves all other CPU state, including a pending delay slot.
+- Delivery is handled on the host: it clears the link bit (as the [`llsc` test](/third_party/pspautotests/tests/cpu/lsu/llsc.c) observes) and preserves all other CPU state, including a pending delay slot.
 - Unsupported: guest interrupt handlers, CP0 exception vectors and `ERET`, handler timing, and interrupt-driven preemption.
 
 Services (`Kernel_Library`):
@@ -93,7 +93,7 @@ Services (`Kernel_Library`):
 - `sceKernelCpuSuspendIntr` (`0x092968F4`): disables delivery and returns the previous enable flag.
 - `sceKernelCpuResumeIntr` (`0x5F10D406`) and `sceKernelCpuResumeIntrWithSync` (`0x3B84732D`): restore bit 0 of `a0`; delivery waits for the next instruction boundary.
 - `sceKernelIsCpuIntrEnable` (`0xB55249D2`): current enable flag.
-- `sceKernelIsCpuIntrSuspended` (`0x47A0B729`): one when the whole `a0` word is zero, following [`suspended.expected`](../third_party/pspautotests/tests/intr/suspended.expected).
+- `sceKernelIsCpuIntrSuspended` (`0x47A0B729`): one when the whole `a0` word is zero, following [`suspended.expected`](/third_party/pspautotests/tests/intr/suspended.expected).
 
 ## Partition memory
 
@@ -145,10 +145,10 @@ Services (`Kernel_Library`):
 
 ## Sources
 
-- Bundled [pspautotests](../third_party/pspautotests/tests) expectations for observed hardware behavior.
+- Bundled [pspautotests](/third_party/pspautotests/tests) expectations for observed hardware behavior.
 - [PPSSPP](https://github.com/hrydgard/ppsspp) as an implementation reference where hardware results are missing.
 
 ## Tests
 
 - Unit tests live next to each component under `src/*/tests/`.
-- Execution tests compare bundled hardware-test output and homebrew fixture frames byte for byte at two load addresses; see the [fixtures](../src/runtime/tests/fixtures/README.md).
+- Execution tests compare bundled hardware-test output and homebrew fixture frames byte for byte at two load addresses; see the [fixtures](/src/runtime/tests/fixtures/README.md).
