@@ -7,7 +7,7 @@
 namespace psp::detail
 {
 
-Display::Display(const Memory &memory) : memory_(memory), pixels_(std::size_t{width} * height * 4)
+Display::Display(const Memory &memory) : memory_(memory), pixels_(std::size_t{kLcdWidth} * kLcdHeight * 4)
 {
     for (std::size_t alpha = 3; alpha < pixels_.size(); alpha += 4)
     {
@@ -19,7 +19,7 @@ Display::Display(const Memory &memory) : memory_(memory), pixels_(std::size_t{wi
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 void Display::set_mode(std::uint32_t mode, std::uint32_t requested_width, std::uint32_t requested_height)
 {
-    if (mode != 0 || requested_width != width || requested_height != height)
+    if (mode != 0 || requested_width != kLcdWidth || requested_height != kLcdHeight)
     {
         throw std::runtime_error("Unsupported display mode; expected LCD 480x272");
     }
@@ -33,12 +33,12 @@ void Display::set_framebuffer(const Framebuffer &framebuffer, std::uint32_t sync
     }
     if (framebuffer.address.value_of() != 0)
     {
-        if ((framebuffer.address.value_of() & 15U) != 0 || framebuffer.stride < width ||
+        if ((framebuffer.address.value_of() & 15U) != 0 || framebuffer.stride < kLcdWidth ||
             !std::has_single_bit(framebuffer.stride))
         {
             throw std::runtime_error("Invalid framebuffer address alignment or stride");
         }
-        const auto size = static_cast<std::uint64_t>(framebuffer.stride) * height * 4;
+        const auto size = static_cast<std::uint64_t>(framebuffer.stride) * kLcdHeight * 4;
         if (size > (std::uint64_t{1} << 32) - framebuffer.address.value_of())
         {
             throw std::runtime_error("Framebuffer exceeds guest address space");
@@ -77,10 +77,10 @@ void Display::capture()
     }
     else
     {
-        for (std::uint32_t row = 0; row < height; ++row)
+        for (std::uint32_t row = 0; row < kLcdHeight; ++row)
         {
             const auto address = GuestAddress{active_.address.value_of() + row * active_.stride * 4};
-            auto destination = std::span{pixels_}.subspan(std::size_t{row} * width * 4, std::size_t{width} * 4);
+            auto destination = std::span{pixels_}.subspan(std::size_t{row} * kLcdWidth * 4, std::size_t{kLcdWidth} * 4);
             memory_.read_into(address, std::as_writable_bytes(destination));
         }
     }

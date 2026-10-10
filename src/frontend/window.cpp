@@ -1,7 +1,5 @@
 #include "frontend/window.hpp"
 
-#include "runtime/display.hpp"
-
 #include <algorithm>
 #include <stdexcept>
 #include <string>
@@ -41,24 +39,24 @@ Window::Window()
     renderer_.reset(SDL_CreateRenderer(window_.get(), nullptr));
     require(renderer_ != nullptr);
     require(SDL_SetRenderVSync(renderer_.get(), 0));
-    require(SDL_SetRenderLogicalPresentation(renderer_.get(), detail::Display::width, detail::Display::height,
-                                             SDL_LOGICAL_PRESENTATION_LETTERBOX));
-    texture_.reset(SDL_CreateTexture(renderer_.get(), SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
-                                     detail::Display::width, detail::Display::height));
+    require(
+        SDL_SetRenderLogicalPresentation(renderer_.get(), kLcdWidth, kLcdHeight, SDL_LOGICAL_PRESENTATION_LETTERBOX));
+    texture_.reset(
+        SDL_CreateTexture(renderer_.get(), SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, kLcdWidth, kLcdHeight));
     require(texture_ != nullptr);
     require(SDL_SetTextureScaleMode(texture_.get(), SDL_SCALEMODE_NEAREST));
     require(SDL_SetTextureBlendMode(texture_.get(), SDL_BLENDMODE_NONE));
-    const Payload black(std::size_t{detail::Display::width} * detail::Display::height * 4, 0);
+    const Payload black(std::size_t{kLcdWidth} * kLcdHeight * 4, 0);
     update(black);
 }
 
 void Window::update(std::span<const std::uint8_t> pixels)
 {
-    if (pixels.size() != std::size_t{detail::Display::width} * detail::Display::height * 4)
+    if (pixels.size() != std::size_t{kLcdWidth} * kLcdHeight * 4)
     {
         throw std::invalid_argument("Expected a packed 480x272 RGBA frame");
     }
-    require(SDL_UpdateTexture(texture_.get(), nullptr, pixels.data(), detail::Display::width * 4));
+    require(SDL_UpdateTexture(texture_.get(), nullptr, pixels.data(), kLcdWidth * 4));
     present();
 }
 
@@ -175,7 +173,7 @@ void Window::present()
 int run_windowed(Execution &execution, Window &window)
 {
     const auto start = std::chrono::steady_clock::now();
-    std::uint64_t frames = 0;
+    std::int64_t frames = 0;
     bool finished = false;
     int exit_code = 0;
     while (window.poll())
@@ -199,12 +197,13 @@ int run_windowed(Execution &execution, Window &window)
         }
         ++frames;
         // Fixed-origin rational deadlines avoid accumulated rounding and host refresh drift.
-        const auto deadline = start + std::chrono::nanoseconds{frames * 1'001'000'000 / 60};
+        const auto deadline = start + std::chrono::duration_cast<std::chrono::nanoseconds>(LcdFrames{frames});
         if (!window.wait_until(deadline))
         {
             break;
         }
-        if (std::chrono::steady_clock::now() - deadline < std::chrono::nanoseconds{1'001'000'000 / 60})
+        if (std::chrono::steady_clock::now() - deadline <
+            std::chrono::duration_cast<std::chrono::nanoseconds>(LcdFrames{1}))
         {
             window.update(execution.pixels());
         }

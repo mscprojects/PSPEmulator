@@ -3,6 +3,7 @@
 #include "loader/prx_reader.hpp"
 #include "memory/address.hpp"
 #include "runtime/controller_state.hpp"
+#include "runtime/lcd.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -62,8 +63,8 @@ public:
     // Notify the registered guest exit callback; does not force termination.
     void request_exit();
     std::uint64_t guest_time() const;
-    // Packed 480x272 RGBA bytes of the frame at the last vblank or termination, captured on
-    // the first call after advance(). At termination a pending selection is not displayed.
+    // Packed kLcdWidth x kLcdHeight RGBA bytes of the frame at the last vblank or termination,
+    // captured on the first call after advance(). At termination a pending selection is not displayed.
     std::span<const std::uint8_t> pixels();
     // Available after Finished; remains valid until this execution is destroyed.
     const ExecutionResult &result() const;

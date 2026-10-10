@@ -384,22 +384,22 @@ void Ge::draw(std::uint32_t primitive)
             throw std::runtime_error(fmt::format("Unsupported enabled GE feature 0x{:x}", command));
         }
     }
-    // Region and scissor bounds both clip to the 480 x 272 display.
+    // Region and scissor bounds both clip to the LCD.
     const RenderTarget target{
         .framebuffer = GuestAddress{0x04000000U | (registers_[kFrameBufferPointer] & 0x1FFFF0U)},
         .stride = registers_[kFrameBufferWidth] & 0x7FCU,
         .left = std::max(static_cast<int>(registers_[kRegion1] & 1023), static_cast<int>(registers_[kScissor1] & 1023)),
         .top = std::max(static_cast<int>((registers_[kRegion1] >> 10) & 1023),
                         static_cast<int>((registers_[kScissor1] >> 10) & 1023)),
-        .right = std::min(
-            {479, static_cast<int>(registers_[kRegion2] & 1023), static_cast<int>(registers_[kScissor2] & 1023)}),
-        .bottom = std::min({271, static_cast<int>((registers_[kRegion2] >> 10) & 1023),
+        .right = std::min({kLcdWidth - 1, static_cast<int>(registers_[kRegion2] & 1023),
+                           static_cast<int>(registers_[kScissor2] & 1023)}),
+        .bottom = std::min({kLcdHeight - 1, static_cast<int>((registers_[kRegion2] >> 10) & 1023),
                             static_cast<int>((registers_[kScissor2] >> 10) & 1023)})};
     if (target.stride == 0 || target.stride <= static_cast<std::uint32_t>(target.right))
     {
         throw std::runtime_error("GE framebuffer stride is too small");
     }
-    memory_.validate_range(target.framebuffer, std::size_t{target.stride} * 272 * 4);
+    memory_.validate_range(target.framebuffer, std::size_t{target.stride} * kLcdHeight * 4);
     const std::size_t vertex_size = floating ? 16 : 12;
     validate_pointer(memory_, vertices_);
     memory_.validate_range(vertices_, count * vertex_size);

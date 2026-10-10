@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime/kernel.hpp"
+#include "runtime/lcd.hpp"
 #include "runtime/rasterizer.hpp"
 
 #include <array>

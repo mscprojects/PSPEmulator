@@ -45,7 +45,7 @@ private:
     bool exit_requested_{};
 };
 
-// Pace guest vblanks at 60000/1001 Hz; retain the final frame until close/Escape.
+// Pace guest vblanks at the LCD refresh rate; retain the final frame until close/Escape.
 // Closure during execution returns zero without running further guest instructions.
 int run_windowed(Execution &execution, Window &window);
 

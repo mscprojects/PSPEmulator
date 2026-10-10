@@ -5,6 +5,7 @@
 #include "memory/memory.hpp"
 #include "runtime/address_arena.hpp"
 #include "runtime/guest_structures.hpp"
+#include "runtime/lcd.hpp"
 
 #include <deque>
 #include <map>

@@ -17,7 +17,7 @@ struct RasterVertex
 };
 
 // RGBA 8888 framebuffer with an inclusive pixel clip rectangle. The caller validates
-// the complete stride x 272 range and keeps the clip inside the stride and display.
+// the complete stride x kLcdHeight range and keeps the clip inside the stride and display.
 struct RenderTarget
 {
     GuestAddress framebuffer;

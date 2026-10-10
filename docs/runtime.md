@@ -14,6 +14,7 @@ Each component has one header and one implementation file. Related kernel servic
 - `Ge` owns display-list slots, FIFO submission, stalls, rendering registers, GE callback registrations, pending FINISH notifications, and synchronization waiters. It validates pipeline state and decodes vertices before drawing.
 - The rasterizer (`rasterizer.hpp`) writes triangles and clear rectangles into a validated guest framebuffer. It receives a render target, decoded vertices, and shading or clear mode, and does not read GE registers.
 - `Display` owns the active and pending framebuffer selections and a packed pixel snapshot, independent of SDL.
+- `lcd.hpp` defines the panel size and 60000/1001 Hz refresh once. The display, GE clipping, kernel vblank edges, and SDL frame pacing all use it, so the frontend needs no runtime internals.
 - `GuestIo` owns captured output and the autotest emulator device protocol. It exposes no host filesystem or display.
 - `SyscallDispatcher` owns import bindings and translates guest registers into named operations on those components. Small standard-stream and UTC timezone handlers remain here.
 

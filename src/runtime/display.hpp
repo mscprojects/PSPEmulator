@@ -1,6 +1,7 @@
 #pragma once
 
 #include "memory/memory.hpp"
+#include "runtime/lcd.hpp"
 
 #include <optional>
 #include <span>
@@ -19,11 +20,8 @@ struct Framebuffer
 class Display
 {
 public:
-    static constexpr int width = 480;
-    static constexpr int height = 272;
-
     explicit Display(const Memory &memory);
-    void set_mode(std::uint32_t mode, std::uint32_t width, std::uint32_t height);
+    void set_mode(std::uint32_t mode, std::uint32_t requested_width, std::uint32_t requested_height);
     // Sync 0 approximates next-hsync selection by applying it immediately;
     // sync 1 activates at vblank. A null address disables the framebuffer.
     void set_framebuffer(const Framebuffer &framebuffer, std::uint32_t sync);

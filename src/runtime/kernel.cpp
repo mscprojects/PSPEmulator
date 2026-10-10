@@ -15,12 +15,15 @@ namespace
 // First integer microsecond at or after the LCD edge following time, if the clock can represent it.
 std::optional<std::uint64_t> vblank_after(std::uint64_t time)
 {
-    // LCD vblank is 60000/1001 Hz (PSPSDK pspdisplay.h). Split at the exact
-    // 60-frame period to avoid drift and intermediate overflow.
-    const auto period = time / 1'001'000;
-    const auto edge = (time % 1'001'000) * 60 / 1'001'000 + 1;
-    const auto offset = (edge * 1'001'000 + 59) / 60;
-    const auto start = period * 1'001'000;
+    // One frame lasts cycle / frames microseconds, so `frames` edges span exactly `cycle`
+    // microseconds. Splitting at whole cycles avoids drift and intermediate overflow.
+    using FrameMicroseconds = std::ratio_divide<LcdFrames::period, std::micro>;
+    constexpr std::uint64_t cycle = FrameMicroseconds::num;
+    constexpr std::uint64_t frames = FrameMicroseconds::den;
+    const auto period = time / cycle;
+    const auto edge = (time % cycle) * frames / cycle + 1;
+    const auto offset = (edge * cycle + frames - 1) / frames;
+    const auto start = period * cycle;
     if (offset > std::numeric_limits<std::uint64_t>::max() - start)
     {
         return std::nullopt;
