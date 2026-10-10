@@ -32,7 +32,7 @@ std::uint64_t Execution::guest_time() const
     return runtime_->guest_time();
 }
 
-std::span<const std::uint8_t> Execution::pixels() const
+std::span<const std::uint8_t> Execution::pixels()
 {
     return runtime_->pixels();
 }

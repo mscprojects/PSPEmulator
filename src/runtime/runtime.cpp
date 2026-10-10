@@ -29,6 +29,7 @@ ExecutionEvent Runtime::advance()
     {
         return ExecutionEvent::Finished;
     }
+    frame_captured_ = false;
     for (;;)
     {
         if (kernel_.system_time() == next_vblank_)
@@ -44,7 +45,6 @@ ExecutionEvent Runtime::advance()
             kernel_.select_next_thread(gpu_running || interrupt_ready ? kernel_.system_time() : next_vblank_);
         if (selection == ThreadSelection::Finished)
         {
-            display_.capture();
             result_ = ExecutionResult{io_.take_output(), kernel_.exit_code(), instructions_};
             return ExecutionEvent::Finished;
         }
@@ -117,8 +117,14 @@ std::uint64_t Runtime::guest_time() const
     return kernel_.system_time();
 }
 
-std::span<const std::uint8_t> Runtime::pixels() const
+std::span<const std::uint8_t> Runtime::pixels()
 {
+    // Guest memory changes only inside advance(), so one capture serves every read until then.
+    if (!frame_captured_)
+    {
+        display_.capture();
+        frame_captured_ = true;
+    }
     return display_.pixels();
 }
 

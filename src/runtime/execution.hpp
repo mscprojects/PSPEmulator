@@ -59,9 +59,9 @@ public:
     // Notify the registered guest exit callback; does not force termination.
     void request_exit();
     std::uint64_t guest_time() const;
-    // Packed 480x272 RGBA bytes, captured before returning from advance().
-    // At termination only the active framebuffer is captured, not a pending selection.
-    std::span<const std::uint8_t> pixels() const;
+    // Packed 480x272 RGBA bytes of the frame at the last vblank or termination, captured on
+    // the first call after advance(). At termination a pending selection is not displayed.
+    std::span<const std::uint8_t> pixels();
     // Available after Finished; remains valid until this execution is destroyed.
     const ExecutionResult &result() const;
     // Captured output is also available before termination or after frontend closure.

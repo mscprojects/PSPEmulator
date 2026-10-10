@@ -49,16 +49,19 @@ TEST(DisplayTest, NextFrameSelectionActivatesOnlyAtVblankAndNullDisablesIt)
     display.capture();
     EXPECT_EQ(display.pixels()[0], 0);
     display.vblank();
+    display.capture();
     EXPECT_EQ(display.pixels()[0], 0x11);
     display.set_framebuffer({GuestAddress{0x04100000}, 512, 3}, 1);
     display.capture();
     EXPECT_EQ(display.pixels()[0], 0x11);
     display.vblank();
+    display.capture();
     EXPECT_EQ(display.pixels()[0], 0x22);
     display.set_framebuffer({GuestAddress{0}, 0, 3}, 1);
     display.capture();
     EXPECT_EQ(display.pixels()[0], 0x22);
     display.vblank();
+    display.capture();
     EXPECT_EQ(display.pixels()[0], 0);
     EXPECT_EQ(display.pixels()[3], 255);
 }
@@ -72,10 +75,12 @@ TEST(DisplayTest, LatestSelectionWinsAndImmediateSelectionCancelsPendingChange)
     display.set_framebuffer({GuestAddress{0x04000000}, 512, 3}, 1);
     display.set_framebuffer({GuestAddress{0x04100000}, 512, 3}, 1);
     display.vblank();
+    display.capture();
     EXPECT_EQ(display.pixels()[0], 0x22);
     display.set_framebuffer({GuestAddress{0x04100000}, 512, 3}, 1);
     display.set_framebuffer({GuestAddress{0x04000000}, 512, 3}, 0);
     display.vblank();
+    display.capture();
     EXPECT_EQ(display.pixels()[0], 0x11);
 }
 
@@ -97,6 +102,7 @@ TEST(DisplayTest, RejectsUnsupportedModesAndInvalidFramebufferRangesWithoutRepla
     EXPECT_THROW(display.set_framebuffer({GuestAddress{0xFFFFFFF0}, 512, 3}, 0), std::runtime_error);
     EXPECT_THROW(display.set_framebuffer({GuestAddress{0x04000000}, 0x80000000, 3}, 0), std::runtime_error);
     display.vblank();
+    display.capture();
     EXPECT_EQ(display.pixels()[0], 0x77);
 }
 

@@ -27,6 +27,7 @@ public:
     // Sync 0 approximates next-hsync selection by applying it immediately;
     // sync 1 activates at vblank. A null address disables the framebuffer.
     void set_framebuffer(const Framebuffer &framebuffer, std::uint32_t sync);
+    // Activate a pending next-frame selection. Callers capture separately when they need pixels.
     void vblank();
     // Capture active contents without activating a pending next-frame selection.
     void capture();

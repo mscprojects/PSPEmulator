@@ -16,7 +16,7 @@ public:
     void set_controller(ControllerState input);
     void request_exit();
     std::uint64_t guest_time() const;
-    std::span<const std::uint8_t> pixels() const;
+    std::span<const std::uint8_t> pixels();
     const ExecutionResult &result() const;
     // Captured output is also available before termination or after frontend closure.
     std::string_view output() const;
@@ -33,6 +33,7 @@ private:
     std::uint64_t instruction_budget_;
     std::uint64_t instructions_{};
     std::uint64_t next_vblank_{};
+    bool frame_captured_{};
     std::optional<ExecutionResult> result_;
 };
 

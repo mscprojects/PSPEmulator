@@ -63,7 +63,6 @@ void Display::vblank()
         active_ = *pending_;
         pending_.reset();
     }
-    capture();
 }
 
 void Display::capture()
