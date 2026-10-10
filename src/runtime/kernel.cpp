@@ -111,44 +111,14 @@ void Kernel::start_thread(std::uint32_t id, GuestAddress arguments, std::uint32_
     ready_.push_back(id);
 }
 
-ThreadSelection Kernel::select_next_thread(std::uint64_t idle_deadline)
+ThreadSelection Kernel::select_next_thread()
 {
-    if (idle_deadline < system_time_)
-    {
-        throw std::invalid_argument("Idle deadline precedes guest time");
-    }
     if (exit_code_)
     {
         return ThreadSelection::Finished;
     }
     auto &thread = threads_.at(current_thread_);
-    if (thread.lifecycle == Lifecycle::Started && thread.callback &&
-        thread.state.program_counter == GuestAddress{return_address_.value_of() + 4})
-    {
-        const auto callback_id = thread.callback->id;
-        const auto remove = thread.state.registers[2] != 0;
-        thread.state = thread.callback->state;
-        thread.state.load_linked = false;
-        thread.lifecycle = thread.callback->lifecycle;
-        thread.wait = thread.callback->wait;
-        if (!callback_id)
-        {
-            interrupts_enabled_ = thread.callback->interrupts_enabled;
-        }
-        thread.callback.reset();
-        if (remove && callback_id)
-        {
-            callbacks_.erase(*callback_id);
-            if (exit_callback_ == callback_id)
-            {
-                exit_callback_.reset();
-            }
-        }
-    }
-    if (thread.lifecycle == Lifecycle::Started && thread.state.program_counter == return_address_)
-    {
-        thread.lifecycle = Lifecycle::Finished;
-    }
+    complete_return(thread);
     // A GE/controller event can wake the selected idle thread between selections.
     // It is already running once awakened; consume its ready-queue entry here.
     if (thread.lifecycle == Lifecycle::Started)
@@ -162,25 +132,14 @@ ThreadSelection Kernel::select_next_thread(std::uint64_t idle_deadline)
     {
         return ThreadSelection::Ready;
     }
-    if (select_ready)
+    if (select_ready && ready_.empty())
     {
-        if (ready_.empty() &&
-            std::ranges::any_of(threads_, [](const auto &item) { return item.second.lifecycle == Lifecycle::Waiting; }))
-        {
-            const auto deadline = delayed_.empty() ? idle_deadline : std::min(delayed_.begin()->first, idle_deadline);
-            advance_time(deadline - system_time_);
-            wake_delayed_threads();
-        }
-        if (ready_.empty() &&
-            std::ranges::any_of(threads_, [](const auto &item) { return item.second.lifecycle == Lifecycle::Waiting; }))
+        if (std::ranges::any_of(threads_, [](const auto &item) { return item.second.lifecycle == Lifecycle::Waiting; }))
         {
             return ThreadSelection::Idle;
         }
-        if (ready_.empty())
-        {
-            exit_code_ = std::bit_cast<std::int32_t>(thread.state.registers[2]);
-            return ThreadSelection::Finished;
-        }
+        exit_code_ = std::bit_cast<std::int32_t>(thread.state.registers[2]);
+        return ThreadSelection::Finished;
     }
     if (!ready_.empty())
     {
@@ -222,8 +181,7 @@ void Kernel::delay_thread(std::uint32_t microseconds)
     {
         throw std::overflow_error("Guest delay exceeds clock range");
     }
-    block_current_thread(Wait::Delay);
-    delayed_.emplace(system_time_ + microseconds, current_thread_);
+    delay_until(system_time_ + microseconds, Wait::Delay);
 }
 
 void Kernel::wait(Wait reason)
@@ -270,8 +228,7 @@ void Kernel::wake(std::uint32_t id, Wait reason, std::uint32_t result)
 
 void Kernel::wait_vblank()
 {
-    delay_thread(static_cast<std::uint32_t>(next_vblank_time() - system_time_));
-    threads_.at(current_thread_).wait = Wait::Vblank;
+    delay_until(next_vblank_time(), Wait::Vblank);
 }
 
 std::uint32_t Kernel::create_callback(GuestAddress entry, GuestAddress common)
@@ -379,18 +336,20 @@ bool Kernel::enter_interrupt_callback(GuestAddress entry, std::uint32_t argument
     return true;
 }
 
-void Kernel::advance_time(std::uint64_t microseconds)
+bool Kernel::advance_time(std::uint64_t microseconds)
 {
     if (microseconds > std::numeric_limits<std::uint64_t>::max() - system_time_)
     {
         throw std::overflow_error("Guest clock overflow");
     }
     system_time_ += microseconds;
-    if (next_vblank_ && system_time_ >= *next_vblank_)
+    if (!next_vblank_ || system_time_ < *next_vblank_)
     {
-        interrupt_pending_ = true;
-        next_vblank_ = vblank_after(system_time_);
+        return false;
     }
+    interrupt_pending_ = true;
+    next_vblank_ = vblank_after(system_time_);
+    return true;
 }
 
 std::uint64_t Kernel::system_time() const
@@ -405,6 +364,15 @@ std::uint64_t Kernel::next_vblank_time() const
         throw std::overflow_error("Next vblank exceeds guest clock range");
     }
     return *next_vblank_;
+}
+
+std::optional<std::uint64_t> Kernel::next_wakeup_time() const
+{
+    if (delayed_.empty())
+    {
+        return std::nullopt;
+    }
+    return delayed_.begin()->first;
 }
 
 bool Kernel::deliver_pending_interrupt()
@@ -687,6 +655,46 @@ void Kernel::place_arguments(Thread &thread, PayloadSpan arguments)
     thread.state.registers[4] = static_cast<std::uint32_t>(arguments.size());
     thread.state.registers[5] = address;
     thread.state.registers[29] = (address & ~15U) - 64;
+}
+
+void Kernel::complete_return(Thread &thread)
+{
+    if (thread.lifecycle != Lifecycle::Started)
+    {
+        return;
+    }
+    if (thread.callback && thread.state.program_counter == GuestAddress{return_address_.value_of() + 4})
+    {
+        const auto callback_id = thread.callback->id;
+        const auto remove = thread.state.registers[2] != 0;
+        thread.state = thread.callback->state;
+        thread.state.load_linked = false;
+        thread.lifecycle = thread.callback->lifecycle;
+        thread.wait = thread.callback->wait;
+        if (!callback_id)
+        {
+            interrupts_enabled_ = thread.callback->interrupts_enabled;
+        }
+        thread.callback.reset();
+        if (remove && callback_id)
+        {
+            callbacks_.erase(*callback_id);
+            if (exit_callback_ == callback_id)
+            {
+                exit_callback_.reset();
+            }
+        }
+    }
+    if (thread.lifecycle == Lifecycle::Started && thread.state.program_counter == return_address_)
+    {
+        thread.lifecycle = Lifecycle::Finished;
+    }
+}
+
+void Kernel::delay_until(std::uint64_t deadline, Wait reason)
+{
+    block_current_thread(reason);
+    delayed_.emplace(deadline, current_thread_);
 }
 
 void Kernel::wake_delayed_threads()

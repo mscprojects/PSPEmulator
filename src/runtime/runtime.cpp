@@ -2,6 +2,7 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace psp::detail
@@ -22,7 +23,6 @@ Runtime::Runtime(const ParsedPrx &prx, const ExecutionOptions &options)
         throw std::invalid_argument("Instruction budget must be positive");
     }
     kernel_.initialize(loaded_.entry_point, options.arguments);
-    next_vblank_ = kernel_.next_vblank_time();
 }
 
 ExecutionEvent Runtime::advance()
@@ -32,39 +32,38 @@ ExecutionEvent Runtime::advance()
         return ExecutionEvent::Finished;
     }
     frame_captured_ = false;
+    // Guest time moves only here: one microsecond per CPU instruction or GPU-only
+    // command, or an idle jump to the next wakeup or vblank. Each vblank is handed
+    // to the caller before any later guest work.
+    bool vblank = false;
     for (;;)
     {
-        if (kernel_.system_time() == next_vblank_)
+        if (vblank)
         {
             display_.vblank();
             controller_.vblank();
-            next_vblank_ = kernel_.next_vblank_time();
             return ExecutionEvent::Vblank;
         }
-        const auto gpu_running = ge_.runnable();
-        const auto interrupt_ready = ge_.interrupt_pending() && kernel_.interrupt_callback_ready();
-        const auto selection =
-            kernel_.select_next_thread(gpu_running || interrupt_ready ? kernel_.system_time() : next_vblank_);
+        const auto selection = kernel_.select_next_thread();
         if (selection == ThreadSelection::Finished)
         {
             result_ = ExecutionResult{io_.take_output(), kernel_.exit_code(), instructions_};
             return ExecutionEvent::Finished;
         }
-        // Selection can advance an idle clock exactly to a vblank/wakeup tie.
-        if (kernel_.system_time() == next_vblank_)
-        {
-            continue;
-        }
-        // One GE command and one CPU instruction can progress in the same guest
-        // microsecond. GPU-only work advances time without consuming CPU instructions.
+        // One GE command and one CPU instruction can progress in the same guest microsecond.
+        const auto gpu_running = ge_.runnable();
         ge_.step();
         const auto interrupt_delivered = ge_.deliver_interrupt();
         if (selection == ThreadSelection::Idle && !interrupt_delivered)
         {
             if (gpu_running)
             {
-                kernel_.advance_time(1);
+                vblank = kernel_.advance_time(1);
+                continue;
             }
+            const auto next_vblank = kernel_.next_vblank_time();
+            const auto wakeup = std::min(kernel_.next_wakeup_time().value_or(next_vblank), next_vblank);
+            vblank = kernel_.advance_time(wakeup - kernel_.system_time());
             continue;
         }
         auto &state = kernel_.current_thread_state();
@@ -78,7 +77,7 @@ ExecutionEvent Runtime::advance()
             kernel_.deliver_pending_interrupt();
             const auto syscall = cpu_.step(state);
             ++instructions_;
-            kernel_.advance_time(1);
+            vblank = kernel_.advance_time(1);
             if (syscall)
             {
                 dispatcher_.handle(*syscall, state);

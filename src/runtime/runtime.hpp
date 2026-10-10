@@ -34,7 +34,6 @@ private:
     SyscallDispatcher dispatcher_;
     std::uint64_t instruction_budget_;
     std::uint64_t instructions_{};
-    std::uint64_t next_vblank_{};
     bool frame_captured_{};
     std::optional<ExecutionResult> result_;
 };

@@ -7,7 +7,6 @@
 #include "runtime/guest_structures.hpp"
 
 #include <deque>
-#include <limits>
 #include <map>
 #include <optional>
 #include <span>
@@ -138,10 +137,9 @@ public:
     void start_thread(std::uint32_t id, GuestAddress arguments, std::uint32_t argument_size);
     // Wake elapsed delays, complete returning/exited threads, and select a ready
     // thread by priority, with FIFO ties. Higher-priority ready threads preempt.
-    // Idle advancement stops at the earlier of a wakeup and idle_deadline.
-    // Idle means waiting threads remain with no ready thread at the deadline.
-    // No thread switch occurs inside Cpu::step().
-    ThreadSelection select_next_thread(std::uint64_t idle_deadline = std::numeric_limits<std::uint64_t>::max());
+    // Idle means waiting threads remain with no ready thread; selection never advances
+    // guest time. No thread switch occurs inside Cpu::step().
+    ThreadSelection select_next_thread();
     CpuState &current_thread_state();
     std::uint32_t current_thread_id() const;
     std::uint32_t current_thread_priority() const;
@@ -153,6 +151,7 @@ public:
     // End a thread's wait for reason and supply v0. A thread interrupted by a GE callback
     // resumes its saved continuation only after the callback returns.
     void wake(std::uint32_t id, Wait reason, std::uint32_t result);
+    // Delay the current thread until the next vblank edge, reported as a vblank wait.
     void wait_vblank();
     std::uint32_t create_callback(GuestAddress entry, GuestAddress common);
     void register_exit_callback(std::uint32_t id);
@@ -170,11 +169,14 @@ public:
     // Callers retain deferred notifications.
     bool enter_interrupt_callback(GuestAddress entry, std::uint32_t argument, GuestAddress common);
     // Runtime currently advances one microsecond per instruction, a provisional
-    // deterministic rate rather than a cycle-accurate CPU clock.
-    void advance_time(std::uint64_t microseconds);
+    // deterministic rate rather than a cycle-accurate CPU clock. Returns true when the
+    // clock reaches an LCD vblank edge, which also marks the vblank interrupt pending.
+    bool advance_time(std::uint64_t microseconds);
     std::uint64_t system_time() const;
     // First integer microsecond at or after the next LCD edge; throws at clock overflow.
     std::uint64_t next_vblank_time() const;
+    // Earliest delay or vblank-wait deadline, if any thread waits on guest time.
+    std::optional<std::uint64_t> next_wakeup_time() const;
     // Handle a pending periodic vblank interrupt at an instruction boundary.
     // The HLE handler preserves CPU state except for the Allegrex link bit.
     // Masked events coalesce and remain pending until interrupts are enabled.
@@ -206,6 +208,10 @@ public:
 
 private:
     void place_arguments(Thread &thread, PayloadSpan arguments);
+    // Handle the current thread's return to a sentinel after its delay slot: restore the
+    // context saved before a callback, or finish the thread.
+    void complete_return(Thread &thread);
+    void delay_until(std::uint64_t deadline, Wait reason);
     void wake_delayed_threads();
     void wake_callbacks();
     // Only a running thread outside a GE interrupt callback can block.

@@ -105,18 +105,18 @@ TEST_F(GeTest, ListSyncWakesItsThreadOnlyAtEndAndDrawSyncWaitsForEveryList)
     submit({0x0F000000, 0x0C000000}, 0x08001100, 0x08001100);
     const auto main = kernel.current_thread_id();
     EXPECT_FALSE(ge.list_sync(first, 0));
-    EXPECT_EQ(kernel.select_next_thread(0), ThreadSelection::Idle);
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Idle);
     ge.step();
-    EXPECT_EQ(kernel.select_next_thread(0), ThreadSelection::Idle);
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Idle);
     ge.step();
-    ASSERT_EQ(kernel.select_next_thread(0), ThreadSelection::Ready);
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.current_thread_id(), main);
     EXPECT_EQ(kernel.current_thread_state().registers[2], 0U);
     EXPECT_FALSE(ge.draw_sync(0));
-    EXPECT_EQ(kernel.select_next_thread(0), ThreadSelection::Idle);
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Idle);
     ge.update_stall(1, GuestAddress{0});
     drain();
-    EXPECT_EQ(kernel.select_next_thread(0), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
     EXPECT_EQ(kernel.current_thread_state().registers[2], 0U);
 }
 
@@ -160,7 +160,7 @@ TEST_F(GeTest, FinishCallbackExecutesGuestCodeAndDefersMaskedAndNestedDelivery)
             EXPECT_FALSE(cpu.step(state));
         EXPECT_EQ(memory.read_u32(GuestAddress{0x08003200}), argument);
         EXPECT_EQ(memory.read_u32(GuestAddress{0x08003204}), 0x08003200U);
-        EXPECT_EQ(kernel.select_next_thread(0), ThreadSelection::Ready);
+        EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
         EXPECT_EQ(state, saved); // Includes ignored nonzero callback return.
         EXPECT_EQ(memory.read_bytes(GuestAddress{state.registers[29]}, 64), stack);
     }
@@ -227,7 +227,7 @@ TEST_F(GeTest, CyclicJumpIsBoundedEvenWithAllCpuThreadsWaiting)
     kernel.wait(Kernel::Wait::Ge);
     for (unsigned index = 0; index < 3; ++index)
     {
-        EXPECT_EQ(kernel.select_next_thread(kernel.system_time()), ThreadSelection::Idle);
+        EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Idle);
         bounded.step();
         kernel.advance_time(1);
     }
