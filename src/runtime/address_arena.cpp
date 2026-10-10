@@ -68,6 +68,11 @@ void AddressArena::free(AddressRange range)
     auto position =
         std::lower_bound(free_ranges_.begin(), free_ranges_.end(), range.begin,
                          [](const AddressRange &free, std::uint64_t address) { return free.begin < address; });
+    if (range.begin >= range.end || (position != free_ranges_.end() && range.end > position->begin) ||
+        (position != free_ranges_.begin() && std::prev(position)->end > range.begin))
+    {
+        throw std::logic_error("Freed range is empty or overlaps free space");
+    }
     position = free_ranges_.insert(position, range);
     if (position != free_ranges_.begin() && std::prev(position)->end == position->begin)
     {

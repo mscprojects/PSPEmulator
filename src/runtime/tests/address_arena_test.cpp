@@ -92,6 +92,23 @@ TEST(AddressArenaTest, FreeingRangesInAnyOrderRecoversOneContiguousRange)
     } while (std::next_permutation(order.begin(), order.end()));
 }
 
+TEST(AddressArenaTest, RepeatedOrOverlappingFreesAreRejectedWithoutChanges)
+{
+    AddressArena arena(0x1000, 0x1400);
+    const auto first = arena.allocate(1, AllocationDirection::Low);
+    const auto second = arena.allocate(512, AllocationDirection::Low);
+    arena.free(first);
+    for (const auto range :
+         {first, AddressRange{0x1000, 0x1200}, AddressRange{0x1200, 0x1400}, AddressRange{0x1100, 0x1100}})
+    {
+        EXPECT_THROW(arena.free(range), std::logic_error);
+    }
+    EXPECT_EQ(arena.free_size(), 512U);
+    EXPECT_EQ(arena.largest_free_size(), 256U);
+    arena.free(second);
+    EXPECT_EQ(arena.largest_free_size(), 1024U);
+}
+
 TEST(AddressArenaTest, InvalidSizesLeaveFreeSpaceUnchanged)
 {
     AddressArena arena(0x1000, 0x1200);

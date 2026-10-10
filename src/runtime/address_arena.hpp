@@ -31,7 +31,9 @@ public:
     // Round size up to the alignment. Throws std::runtime_error for a zero size or when
     // no free range fits; a failed allocation leaves the arena unchanged.
     AddressRange allocate(std::uint32_t size, AllocationDirection direction);
-    // Return a live range from allocate(), merging adjacent free ranges.
+    // Return a live range from allocate(), merging adjacent free ranges. Throws
+    // std::logic_error without changes for an empty range or one overlapping free space,
+    // such as a repeated free; the caller must not return ranges it never allocated.
     void free(AddressRange range);
     std::uint64_t free_size() const;
     std::uint64_t largest_free_size() const;
