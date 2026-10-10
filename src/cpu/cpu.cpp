@@ -96,28 +96,16 @@ void Cpu::execute(CpuState &state, std::uint32_t instruction, ControlFlow &flow)
         write_register(state, kReturnAddressRegister, state.program_counter.value_of() + kAfterDelaySlotOffset);
         break;
     case 0x04: // BEQ
-        if (state.registers[source] == state.registers[target])
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
+        branch(state, instruction, flow, state.registers[source] == state.registers[target], DelaySlot::Execute);
         break;
     case 0x05: // BNE
-        if (state.registers[source] != state.registers[target])
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
+        branch(state, instruction, flow, state.registers[source] != state.registers[target], DelaySlot::Execute);
         break;
     case 0x06: // BLEZ
-        if (std::bit_cast<std::int32_t>(state.registers[source]) <= 0)
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
+        branch(state, instruction, flow, std::bit_cast<std::int32_t>(state.registers[source]) <= 0, DelaySlot::Execute);
         break;
     case 0x07: // BGTZ
-        if (std::bit_cast<std::int32_t>(state.registers[source]) > 0)
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
+        branch(state, instruction, flow, std::bit_cast<std::int32_t>(state.registers[source]) > 0, DelaySlot::Execute);
         break;
     case 0x09: // ADDIU
         // The immediate is sign-extended; unsigned addition wraps without an overflow trap.
@@ -147,44 +135,18 @@ void Cpu::execute(CpuState &state, std::uint32_t instruction, ControlFlow &flow)
         execute_cop1(state, instruction, flow);
         break;
     case 0x14: // BEQL
-        if (state.registers[source] == state.registers[target])
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
-        else
-        {
-            skip_delay_slot(state, flow);
-        }
+        branch(state, instruction, flow, state.registers[source] == state.registers[target], DelaySlot::SkipIfUntaken);
         break;
     case 0x15: // BNEL
-        if (state.registers[source] != state.registers[target])
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
-        else
-        {
-            skip_delay_slot(state, flow);
-        }
+        branch(state, instruction, flow, state.registers[source] != state.registers[target], DelaySlot::SkipIfUntaken);
         break;
     case 0x16: // BLEZL
-        if (std::bit_cast<std::int32_t>(state.registers[source]) <= 0)
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
-        else
-        {
-            skip_delay_slot(state, flow);
-        }
+        branch(state, instruction, flow, std::bit_cast<std::int32_t>(state.registers[source]) <= 0,
+               DelaySlot::SkipIfUntaken);
         break;
     case 0x17: // BGTZL
-        if (std::bit_cast<std::int32_t>(state.registers[source]) > 0)
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
-        else
-        {
-            skip_delay_slot(state, flow);
-        }
+        branch(state, instruction, flow, std::bit_cast<std::int32_t>(state.registers[source]) > 0,
+               DelaySlot::SkipIfUntaken);
         break;
     case 0x1F: // SPECIAL3: bitfields and Allegrex byte/bit operations.
         execute_special3(state, instruction);
@@ -556,71 +518,31 @@ void Cpu::execute_regimm(CpuState &state, std::uint32_t instruction, ControlFlow
     switch (operation)
     {
     case 0x00: // BLTZ
-        if (value < 0)
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
+        branch(state, instruction, flow, value < 0, DelaySlot::Execute);
         break;
     case 0x01: // BGEZ
-        if (value >= 0)
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
+        branch(state, instruction, flow, value >= 0, DelaySlot::Execute);
         break;
     case 0x02: // BLTZL
-        if (value < 0)
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
-        else
-        {
-            skip_delay_slot(state, flow);
-        }
+        branch(state, instruction, flow, value < 0, DelaySlot::SkipIfUntaken);
         break;
     case 0x03: // BGEZL
-        if (value >= 0)
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
-        else
-        {
-            skip_delay_slot(state, flow);
-        }
+        branch(state, instruction, flow, value >= 0, DelaySlot::SkipIfUntaken);
         break;
     case 0x10: // BLTZAL
-        if (value < 0)
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
+        branch(state, instruction, flow, value < 0, DelaySlot::Execute);
         write_register(state, kReturnAddressRegister, state.program_counter.value_of() + kAfterDelaySlotOffset);
         break;
     case 0x11: // BGEZAL
-        if (value >= 0)
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
+        branch(state, instruction, flow, value >= 0, DelaySlot::Execute);
         write_register(state, kReturnAddressRegister, state.program_counter.value_of() + kAfterDelaySlotOffset);
         break;
     case 0x12: // BLTZALL
-        if (value < 0)
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
-        else
-        {
-            skip_delay_slot(state, flow);
-        }
+        branch(state, instruction, flow, value < 0, DelaySlot::SkipIfUntaken);
         write_register(state, kReturnAddressRegister, state.program_counter.value_of() + kAfterDelaySlotOffset);
         break;
     case 0x13: // BGEZALL
-        if (value >= 0)
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
-        else
-        {
-            skip_delay_slot(state, flow);
-        }
+        branch(state, instruction, flow, value >= 0, DelaySlot::SkipIfUntaken);
         write_register(state, kReturnAddressRegister, state.program_counter.value_of() + kAfterDelaySlotOffset);
         break;
     default:
@@ -668,14 +590,8 @@ void Cpu::execute_cop1(CpuState &state, std::uint32_t instruction, ControlFlow &
         {
             throw std::runtime_error("Unsupported Allegrex FPU branch selector");
         }
-        if (state.floating_point_branch_condition == ((target & 1U) != 0))
-        {
-            flow.following_instruction = branch_address(state, instruction);
-        }
-        else if ((target & 2U) != 0)
-        {
-            skip_delay_slot(state, flow);
-        }
+        branch(state, instruction, flow, state.floating_point_branch_condition == ((target & 1U) != 0),
+               (target & 2U) != 0 ? DelaySlot::SkipIfUntaken : DelaySlot::Execute);
         return;
     case 0x14: // Word format: CVT.S.W.
         if ((instruction & 0x001F003FU) != 0x20U)
@@ -716,6 +632,19 @@ void Cpu::execute_cop1(CpuState &state, std::uint32_t instruction, ControlFlow &
         break;
     }
     throw std::runtime_error("Unsupported Allegrex FPU instruction");
+}
+
+void Cpu::branch(const CpuState &state, std::uint32_t instruction, ControlFlow &flow, bool taken,
+                 DelaySlot delay_slot) const
+{
+    if (taken)
+    {
+        flow.following_instruction = branch_address(state, instruction);
+    }
+    else if (delay_slot == DelaySlot::SkipIfUntaken)
+    {
+        skip_delay_slot(state, flow);
+    }
 }
 
 GuestAddress Cpu::branch_address(const CpuState &state, std::uint32_t instruction) const

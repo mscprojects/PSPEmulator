@@ -29,6 +29,13 @@ class Cpu
         bool floating_point_branch_condition;
     };
 
+    // Untaken branch-likely instructions skip their delay slot; ordinary branches execute it.
+    enum class DelaySlot : std::uint8_t
+    {
+        Execute,
+        SkipIfUntaken,
+    };
+
     enum class DataAlignment : std::uint8_t
     {
         Byte = 1,
@@ -51,6 +58,8 @@ private:
     void execute_special3(CpuState &state, std::uint32_t instruction);
     void execute_regimm(CpuState &state, std::uint32_t instruction, ControlFlow &flow);
     void execute_cop1(CpuState &state, std::uint32_t instruction, ControlFlow &flow);
+    void branch(const CpuState &state, std::uint32_t instruction, ControlFlow &flow, bool taken,
+                DelaySlot delay_slot) const;
     GuestAddress branch_address(const CpuState &state, std::uint32_t instruction) const;
     void skip_delay_slot(const CpuState &state, ControlFlow &flow) const;
     GuestAddress jump_address(const CpuState &state, std::uint32_t instruction) const;
