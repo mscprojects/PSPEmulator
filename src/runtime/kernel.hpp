@@ -228,6 +228,8 @@ private:
     std::deque<std::uint32_t> ready_;
     std::uint32_t current_thread_{};
     std::uint64_t system_time_{};
+    // Cached so instruction steps avoid division. Empty once the next edge exceeds the clock range.
+    std::optional<std::uint64_t> next_vblank_;
     std::multimap<std::uint64_t, std::uint32_t> delayed_;
     std::map<std::uint32_t, Callback> callbacks_;
     std::optional<std::uint32_t> exit_callback_;

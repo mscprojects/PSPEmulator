@@ -10,9 +10,30 @@
 namespace psp::detail
 {
 
+namespace
+{
+
+// First integer microsecond at or after the LCD edge following time, if the clock can represent it.
+std::optional<std::uint64_t> vblank_after(std::uint64_t time)
+{
+    // LCD vblank is 60000/1001 Hz (PSPSDK pspdisplay.h). Split at the exact
+    // 60-frame period to avoid drift and intermediate overflow.
+    const auto period = time / 1'001'000;
+    const auto edge = (time % 1'001'000) * 60 / 1'001'000 + 1;
+    const auto offset = (edge * 1'001'000 + 59) / 60;
+    const auto start = period * 1'001'000;
+    if (offset > std::numeric_limits<std::uint64_t>::max() - start)
+    {
+        return std::nullopt;
+    }
+    return start + offset;
+}
+
+} // namespace
+
 Kernel::Kernel(Memory &memory, GuestAddress load_address, std::size_t memory_size, std::span<const PrxSegment> segments,
                GuestAddress global_pointer)
-    : memory_(memory), global_pointer_(global_pointer), return_address_(GuestAddress{0})
+    : memory_(memory), global_pointer_(global_pointer), return_address_(GuestAddress{0}), next_vblank_(vblank_after(0))
 {
     if (memory_size == 0 || memory_size > (std::uint64_t{1} << 32) - load_address.value_of())
     {
@@ -350,16 +371,12 @@ void Kernel::advance_time(std::uint64_t microseconds)
     {
         throw std::overflow_error("Guest clock overflow");
     }
-    // LCD vblank is 60000/1001 Hz (PSPSDK pspdisplay.h). Split the
-    // calculation to keep it within uint64_t even at the clock's limit.
-    const auto vblanks = [](std::uint64_t time)
-    { return (time / 1'001'000) * 60 + (time % 1'001'000) * 60 / 1'001'000; };
-    const auto next_time = system_time_ + microseconds;
-    if (vblanks(next_time) != vblanks(system_time_))
+    system_time_ += microseconds;
+    if (next_vblank_ && system_time_ >= *next_vblank_)
     {
         interrupt_pending_ = true;
+        next_vblank_ = vblank_after(system_time_);
     }
-    system_time_ = next_time;
 }
 
 std::uint64_t Kernel::system_time() const
@@ -369,16 +386,11 @@ std::uint64_t Kernel::system_time() const
 
 std::uint64_t Kernel::next_vblank_time() const
 {
-    // Split at the exact 60-frame period to avoid drift and intermediate overflow.
-    const auto period = system_time_ / 1'001'000;
-    const auto edge = (system_time_ % 1'001'000) * 60 / 1'001'000 + 1;
-    const auto offset = (edge * 1'001'000 + 59) / 60;
-    const auto start = period * 1'001'000;
-    if (offset > std::numeric_limits<std::uint64_t>::max() - start)
+    if (!next_vblank_)
     {
         throw std::overflow_error("Next vblank exceeds guest clock range");
     }
-    return start + offset;
+    return *next_vblank_;
 }
 
 bool Kernel::deliver_pending_interrupt()
