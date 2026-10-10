@@ -14,6 +14,35 @@ namespace psp::detail
 namespace
 {
 
+// GE command numbers, named as in the pinned PSPSDK's gu/guInternal.h. Each state
+// command stores its 24-bit argument in the register with the same number.
+constexpr std::uint32_t kNop = 0x00;
+constexpr std::uint32_t kVertexAddress = 0x01;
+constexpr std::uint32_t kIndexAddress = 0x02;
+constexpr std::uint32_t kPrimitive = 0x04;
+constexpr std::uint32_t kJump = 0x08;
+constexpr std::uint32_t kEnd = 0x0C;
+constexpr std::uint32_t kFinish = 0x0F;
+constexpr std::uint32_t kBase = 0x10;
+constexpr std::uint32_t kVertexType = 0x12;
+constexpr std::uint32_t kOffsetAddress = 0x13;
+constexpr std::uint32_t kRegion1 = 0x15;
+constexpr std::uint32_t kRegion2 = 0x16;
+constexpr std::uint32_t kLightingEnable = 0x17;
+constexpr std::uint32_t kDepthClipEnable = 0x1C;
+constexpr std::uint32_t kLogicOpEnable = 0x28;
+constexpr std::uint32_t kShadeMode = 0x50;
+constexpr std::uint32_t kFrameBufferPointer = 0x9C;
+constexpr std::uint32_t kFrameBufferWidth = 0x9D;
+constexpr std::uint32_t kClutLoad = 0xC4;
+constexpr std::uint32_t kFrameBufferPixelFormat = 0xD2;
+constexpr std::uint32_t kClearMode = 0xD3;
+constexpr std::uint32_t kScissor1 = 0xD4;
+constexpr std::uint32_t kScissor2 = 0xD5;
+constexpr std::uint32_t kDepthMask = 0xE7;
+constexpr std::uint32_t kColorMask = 0xE8;
+constexpr std::uint32_t kAlphaMask = 0xE9;
+
 GuestAddress physical(GuestAddress address)
 {
     return GuestAddress{address.value_of() & 0x1FFFFFFFU};
@@ -268,8 +297,8 @@ void Ge::wake_waiters()
 
 GuestAddress Ge::relative_address(std::uint32_t low) const
 {
-    const auto address =
-        std::uint64_t{(registers_[0x10] & 0xF0000U) << 8} + (low & 0xFFFFFFU) + (std::uint64_t{registers_[0x13]} << 8);
+    const auto address = std::uint64_t{(registers_[kBase] & 0xF0000U) << 8} + (low & 0xFFFFFFU) +
+                         (std::uint64_t{registers_[kOffsetAddress]} << 8);
     if (address > std::numeric_limits<std::uint32_t>::max())
     {
         throw std::runtime_error("GE relative address overflow");
@@ -283,37 +312,37 @@ void Ge::execute(List &list, std::uint32_t word)
     const auto value = word & 0xFFFFFFU;
     switch (command)
     {
-    case 0x00: // NOP
+    case kNop:
         return;
-    case 0x01: // VADDR
+    case kVertexAddress:
         vertices_ = relative_address(value);
         return;
-    case 0x02: // IADDR; indexed drawing is rejected by vertex format validation.
-    case 0x10: // BASE
+    case kIndexAddress: // Indexed drawing is rejected by vertex format validation.
+    case kBase:
         registers_[command] = value;
         return;
-    case 0x04: // PRIM
+    case kPrimitive:
         draw(value);
         return;
-    case 0x08: // JUMP, including sceGuGetMemory's inline vertex data.
+    case kJump: // Includes sceGuGetMemory's inline vertex data.
         list.pc = relative_address(value);
         validate_pointer(memory_, list.pc);
         return;
-    case 0x0C: // END
+    case kEnd:
         if (!list.finished)
         {
             throw std::runtime_error("GE END without FINISH is unsupported");
         }
         list.done = true;
         return;
-    case 0x0F: // FINISH
+    case kFinish:
         list.finished = true;
         if (list.callback && list.callback->finish.value_of() != 0)
         {
             interrupts_.push_back({*list.callback, value & 0xFFFFU});
         }
         return;
-    case 0xC4: // CLUT_LOAD: a zero-block reset has no upload.
+    case kClutLoad: // A zero-block reset has no upload.
         if (value != 0)
         {
             throw std::runtime_error("GE CLUT loading is unsupported");
@@ -333,35 +362,37 @@ void Ge::draw(std::uint32_t primitive)
 {
     const auto count = primitive & 0xFFFFU;
     const auto type = primitive >> 16;
-    const auto clearing = (registers_[0xD3] & 1U) != 0;
-    const auto format = registers_[0x12];
+    const auto clearing = (registers_[kClearMode] & 1U) != 0;
+    const auto format = registers_[kVertexType];
     const bool floating = format == 0x80019CU; // RGBA8888 + float XYZ + through mode.
     if ((!floating && format != 0x80011CU) ||
         (clearing ? floating || type != 6 || count != 2 : type != 3 || count != 3))
     {
         throw std::runtime_error("GE supports one unindexed 2D triangle or one clear sprite per PRIM");
     }
-    if (registers_[0xD2] != 3 || registers_[0x50] > 1 || registers_[0xE8] != 0 || registers_[0xE9] != 0 ||
-        (clearing ? registers_[0xD3] != 0x101 && registers_[0xD3] != 0x301 : registers_[0xE7] != 1))
+    if (registers_[kFrameBufferPixelFormat] != 3 || registers_[kShadeMode] > 1 || registers_[kColorMask] != 0 ||
+        registers_[kAlphaMask] != 0 ||
+        (clearing ? registers_[kClearMode] != 0x101 && registers_[kClearMode] != 0x301 : registers_[kDepthMask] != 1))
     {
         throw std::runtime_error("Unsupported GE framebuffer, shade, mask, or depth state");
     }
-    for (const auto command : {0x17U, 0x18U, 0x19U, 0x1AU, 0x1BU, 0x1DU, 0x1EU, 0x1FU, 0x20U, 0x21U, 0x22U, 0x23U,
-                               0x24U, 0x25U, 0x26U, 0x27U, 0x28U})
+    // Every enable flag except depth clipping selects an unsupported pipeline feature.
+    for (auto command = kLightingEnable; command <= kLogicOpEnable; ++command)
     {
-        if (registers_[command] != 0)
+        if (command != kDepthClipEnable && registers_[command] != 0)
         {
             throw std::runtime_error(fmt::format("Unsupported enabled GE feature 0x{:x}", command));
         }
     }
     clip_ = {
-        std::max(static_cast<int>(registers_[0x15] & 1023), static_cast<int>(registers_[0xD4] & 1023)),
-        std::max(static_cast<int>((registers_[0x15] >> 10) & 1023), static_cast<int>((registers_[0xD4] >> 10) & 1023)),
-        std::min({479, static_cast<int>(registers_[0x16] & 1023), static_cast<int>(registers_[0xD5] & 1023)}),
-        std::min({271, static_cast<int>((registers_[0x16] >> 10) & 1023),
-                  static_cast<int>((registers_[0xD5] >> 10) & 1023)})};
-    stride_ = registers_[0x9D] & 0x7FCU;
-    framebuffer_ = GuestAddress{0x04000000U | (registers_[0x9C] & 0x1FFFF0U)};
+        std::max(static_cast<int>(registers_[kRegion1] & 1023), static_cast<int>(registers_[kScissor1] & 1023)),
+        std::max(static_cast<int>((registers_[kRegion1] >> 10) & 1023),
+                 static_cast<int>((registers_[kScissor1] >> 10) & 1023)),
+        std::min({479, static_cast<int>(registers_[kRegion2] & 1023), static_cast<int>(registers_[kScissor2] & 1023)}),
+        std::min({271, static_cast<int>((registers_[kRegion2] >> 10) & 1023),
+                  static_cast<int>((registers_[kScissor2] >> 10) & 1023)})};
+    stride_ = registers_[kFrameBufferWidth] & 0x7FCU;
+    framebuffer_ = GuestAddress{0x04000000U | (registers_[kFrameBufferPointer] & 0x1FFFF0U)};
     if (stride_ == 0 || stride_ <= static_cast<std::uint32_t>(clip_[2]))
     {
         throw std::runtime_error("GE framebuffer stride is too small");
@@ -440,7 +471,7 @@ void Ge::triangle(std::array<Vertex, 3> vertices)
                 continue;
             }
             auto color = flat_color;
-            if (registers_[0x50] == 1)
+            if (registers_[kShadeMode] == 1)
             {
                 color = 0;
                 for (unsigned channel = 0; channel < 4; ++channel)
@@ -479,7 +510,7 @@ void Ge::write_pixel(int x, int y, std::uint32_t color, bool clearing)
 {
     const auto address = GuestAddress{framebuffer_.value_of() +
                                       (static_cast<std::uint32_t>(y) * stride_ + static_cast<std::uint32_t>(x)) * 4};
-    if (clearing && (registers_[0xD3] & 0x200U) == 0)
+    if (clearing && (registers_[kClearMode] & 0x200U) == 0)
     {
         color = (color & 0xFFFFFFU) | (memory_.read_u32(address) & 0xFF000000U);
     }
