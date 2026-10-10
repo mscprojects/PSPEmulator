@@ -13,6 +13,8 @@ class Runtime
 public:
     Runtime(const ParsedPrx &prx, const ExecutionOptions &options);
     ExecutionEvent advance();
+    // True when guest work cannot proceed without host input, such as an exit request.
+    bool blocked() const;
     void set_controller(ControllerState input);
     void request_exit();
     std::uint64_t guest_time() const;

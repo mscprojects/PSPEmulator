@@ -334,6 +334,19 @@ bool Kernel::interrupt_callback_ready() const
                { return item.second.lifecycle == Lifecycle::Started || item.second.lifecycle == Lifecycle::Waiting; });
 }
 
+bool Kernel::untimed_waits_only() const
+{
+    const auto untimed = [](const auto &item)
+    {
+        const auto &thread = item.second;
+        return thread.lifecycle == Lifecycle::Created || thread.lifecycle == Lifecycle::Finished ||
+               (thread.lifecycle == Lifecycle::Waiting && !thread.callback &&
+                (thread.wait == Wait::SleepCallback || thread.wait == Wait::Ge));
+    };
+    return !exit_code_ && std::ranges::all_of(threads_, untimed) &&
+           std::ranges::none_of(callbacks_, [](const auto &item) { return item.second.notifications != 0; });
+}
+
 bool Kernel::enter_interrupt_callback(GuestAddress entry, std::uint32_t argument, GuestAddress common)
 {
     if (!interrupt_callback_ready())

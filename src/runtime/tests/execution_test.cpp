@@ -609,6 +609,28 @@ TEST(ExecutionTest, StopsAnInfiniteLoopAtTheInstructionBudget)
     }
 }
 
+TEST(ExecutionTest, HeadlessRunRejectsAGuestThatOnlyHostInputCouldWake)
+{
+    ServicePrxFixture program("ThreadManForUser", {0x82826F70});
+    program.call(0); // sceKernelSleepThreadCB without any callback
+    const auto parsed = program.finish();
+    try
+    {
+        execute_prx(parsed);
+        FAIL() << "A guest without a wake source must not repeat idle vblanks forever";
+    }
+    catch (const std::runtime_error &error)
+    {
+        EXPECT_NE(std::string_view{error.what()}.find("Guest is blocked"), std::string_view::npos);
+    }
+    // Incremental callers can still deliver host input, so advance() keeps yielding vblanks.
+    Execution execution(parsed);
+    for (int frame = 0; frame < 3; ++frame)
+    {
+        EXPECT_EQ(execution.advance(), ExecutionEvent::Vblank);
+    }
+}
+
 TEST(ExecutionTest, ReportsCpuFaultsAndInvokedUnsupportedImports)
 {
     test::PrxFixture fixture;

@@ -2,6 +2,8 @@
 
 #include "runtime/runtime.hpp"
 
+#include <stdexcept>
+
 namespace psp
 {
 
@@ -15,6 +17,17 @@ Execution::~Execution() = default;
 ExecutionEvent Execution::advance()
 {
     return runtime_->advance();
+}
+
+void Execution::run_to_completion()
+{
+    while (runtime_->advance() != ExecutionEvent::Finished)
+    {
+        if (runtime_->blocked())
+        {
+            throw std::runtime_error("Guest is blocked: no thread can run or wake without host input");
+        }
+    }
 }
 
 void Execution::set_controller(ControllerState input)
@@ -50,9 +63,7 @@ std::string_view Execution::output() const
 ExecutionResult execute_prx(const ParsedPrx &prx, const ExecutionOptions &options)
 {
     Execution execution(prx, options);
-    while (execution.advance() != ExecutionEvent::Finished)
-    {
-    }
+    execution.run_to_completion();
     return execution.result();
 }
 

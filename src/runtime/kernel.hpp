@@ -165,6 +165,9 @@ public:
     // An early request is retained until an exit callback is registered.
     void request_exit();
     bool interrupt_callback_ready() const;
+    // True when no thread can run or wake through guest time: every live thread waits
+    // for a callback notification or GE completion, and no notification is pending.
+    bool untimed_waits_only() const;
     // Run a GE interrupt callback on the selected thread, preserving an idle wait.
     // Interrupt callbacks cannot block or be preempted by another thread. Returns false
     // while interrupts are masked, any callback is active, or no live thread remains.

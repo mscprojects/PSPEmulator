@@ -99,6 +99,11 @@ ExecutionEvent Runtime::advance()
     }
 }
 
+bool Runtime::blocked() const
+{
+    return !ge_.runnable() && !ge_.interrupt_pending() && kernel_.untimed_waits_only();
+}
+
 void Runtime::set_controller(ControllerState input)
 {
     controller_.set_input(input);

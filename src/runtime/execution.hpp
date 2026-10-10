@@ -54,6 +54,9 @@ public:
     Execution &operator=(const Execution &) = delete;
 
     ExecutionEvent advance();
+    // Advance without host input until termination. Throws if no guest thread can run
+    // or wake without host input, which would otherwise repeat idle vblanks forever.
+    void run_to_completion();
     // Host state is sampled only at a future guest vblank, never on host time.
     void set_controller(ControllerState input);
     // Notify the registered guest exit callback; does not force termination.
@@ -75,6 +78,7 @@ private:
 // Captures console output without accessing host files. Uses a minimal
 // PSP runtime, not a complete kernel. Uncalled imports may remain unsupported;
 // invoking one, a CPU fault, or budget exhaustion throws with guest PC context.
+// A guest blocked on host input also throws, as described for run_to_completion().
 ExecutionResult execute_prx(const ParsedPrx &prx, const ExecutionOptions &options = {});
 
 } // namespace psp
