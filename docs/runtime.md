@@ -8,6 +8,8 @@
 - `output()` returns captured console bytes at any time; `result()` is available after `Finished`.
 - `run_to_completion()` throws when the guest can only be woken by host input (every live thread waits for a callback notification or GE completion with nothing pending). Otherwise it would loop over idle vblanks forever.
 - Guest faults, unsupported imports, and budget exhaustion throw with the guest PC and instruction word.
+- The startup thread gets a 64 KiB stack, GP, priority `0x20`, and the NUL-separated `ExecutionOptions::arguments` in `a0`/`a1`.
+- The guest returns its exit code from the last thread's `v0`, or zero after `sceKernelExitGame`.
 
 ## Components
 
@@ -53,6 +55,31 @@ Services (`ThreadManForUser`):
 - `sceKernelGetSystemTimeWide` (`0x82BC5777`): full 64-bit time in `v0`/`v1`.
 - `sceKernelDelayThread` (`0xCEADEB47`): waits `a0` microseconds and returns zero. A zero delay yields to ready threads of equal priority.
 - `sceKernelReferThreadStatus` (`0x17C1684E`): writes a 104-byte `SceKernelThreadInfo` for thread `a0` (zero selects the current thread). Wait types: sleep 1, delay 2, controller and GE 4 (event-flag approximation), vblank 12. Scheduling counters stay zero.
+
+## Threads, synchronization, and I/O
+
+Threads (`ThreadManForUser`):
+
+- `sceKernelCreateThread` (`0x446D8DE6`): name, entry, priority, stack size (at least 512 bytes), and attributes; the stack comes from the allocation arena.
+- `sceKernelStartThread` (`0xF475845D`): copies `a1` bytes from `a2` to the top of the new stack and makes the thread ready.
+- `sceKernelExitThread` (`0xAA73C935`), `sceKernelGetThreadId` (`0x293B45B8`), `sceKernelGetThreadCurrentPriority` (`0x94AA61EE`).
+- Unsupported: thread deletion, priority changes, and stack reclamation.
+
+Synchronization (needed by Newlib startup in `cpu_div`):
+
+- `sceKernelCreateLwMutex` (`0x19CFF145`) and `sceKernelDeleteLwMutex` (`0x60107536`): the guest work area stays authoritative for owner and count.
+- `sceKernelLockLwMutex` (`0xBEA46419`) and `sceKernelUnlockLwMutex` (`0x15B6446B`), in `Kernel_Library`: uncontended and recursive locks only.
+- `sceKernelCreateSema` (`0xD6DA4BA1`), `sceKernelDeleteSema` (`0x28B6489C`), `sceKernelWaitSema` (`0x4E3A1105`), and `sceKernelSignalSema` (`0x3F53E640`): waits must be satisfiable immediately and have no timeout.
+- Contended locks, unsatisfiable waits, and timeouts throw instead of blocking.
+
+I/O and system parameters:
+
+- `sceIoWrite` (`IoFileMgrForUser`, `0x42EC03AC`): captures writes to stdout and stderr; other descriptors throw.
+- `sceIoDopen` (`0xB29DDF9C`): no guest filesystem; returns `ENOENT` (`0x80010002`).
+- `sceIoDevctl` (`0x54F5FB11`): the autotest `emulator:` device. Command 1 reports no display, 2 captures output, and 3 is a probe.
+- `StdioForUser` `0x172D316E`, `0xA6BAB2E9`, and `0xF78BA90A` return descriptors 0, 1, and 2.
+- `sceUtilityGetSystemParamInt` (`sceUtility`, `0xA5DA2406`): IDs 6 and 7 return 0 (UTC, no daylight saving); other IDs throw.
+- The runtime never touches host files; guest libc does all formatting.
 
 ## Interrupts
 
@@ -118,7 +145,7 @@ Services (`Kernel_Library`):
 
 ## Sources
 
-- PSPSDK headers and import tables: [thread](../third_party/pspsdk/src/user/pspthreadman.h), [interrupt](../third_party/pspsdk/src/user/pspintrman.h), [system memory](../third_party/pspsdk/src/user/pspsysmem.h), [display](../third_party/pspsdk/src/display/pspdisplay.h), [controller](../third_party/pspsdk/src/ctrl/pspctrl.h), [GE](../third_party/pspsdk/src/ge/pspge.h).
+- PSPSDK headers and import tables: [thread](../third_party/pspsdk/src/user/pspthreadman.h), [system parameters](../third_party/pspsdk/src/utility/psputility_sysparam.h), [interrupt](../third_party/pspsdk/src/user/pspintrman.h), [system memory](../third_party/pspsdk/src/user/pspsysmem.h), [display](../third_party/pspsdk/src/display/pspdisplay.h), [controller](../third_party/pspsdk/src/ctrl/pspctrl.h), [GE](../third_party/pspsdk/src/ge/pspge.h).
 - Bundled [pspautotests](../third_party/pspautotests/tests) expectations for observed hardware behavior.
 - [PPSSPP](https://github.com/hrydgard/ppsspp) as an implementation reference where hardware results are missing.
 
