@@ -7,6 +7,7 @@
 #include <charconv>
 #include <cstdio>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
@@ -22,7 +23,9 @@ int main(int argc, char *argv[])
             throw std::invalid_argument(usage);
         }
         psp::ExecutionOptions options;
-        options.arguments = {argv[1]};
+        // SDK startup code corrupts its stack on a leading '/' without a PSP drive prefix,
+        // so the guest sees only the file name, independent of the host directory.
+        options.arguments = {std::filesystem::path(argv[1]).filename().string()};
         bool window = false;
         bool budget_supplied = false;
         for (int index = 2; index < argc; ++index)
