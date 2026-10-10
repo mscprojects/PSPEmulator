@@ -45,9 +45,9 @@ add_library(psp_core
     src/cpu/cpu.cpp
     src/cpu/floating_point.cpp
     src/memory/memory.cpp
-    src/runtime/address_arena.cpp
     src/loader/prx_reader.cpp
     src/loader/prx.cpp
+    src/runtime/address_arena.cpp
     src/runtime/controller.cpp
     src/runtime/display.cpp
     src/runtime/ge.cpp
