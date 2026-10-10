@@ -1,6 +1,6 @@
 # PSP emulator implementation plan
 
-Status: SDL display and controller input are complete and verified. The GE triangle milestone is in progress and checkpointed at the user's request on 2026-10-09. Its initial implementation builds, but the triangle milestone is not complete. Resume with the GE verification work below.
+Status: SDL display, controller input, and the GE triangle milestone are complete and verified. GE completion on 2026-10-10 includes the SDK-linked triangle fixture, guest finish callbacks, full-frame pixel comparisons, desktop SDL checks, and all required CI configurations. Rasterization remains provisional rather than verified as bit-exact PSP behavior.
 
 ## REQ
 
@@ -77,11 +77,11 @@ Current limits: sampling cycle 0, count-1 positive reads, and one latest unread 
 
 Controller verification: `just ci` passed formatting and clang-tidy, with all 185 tests passing in Debug, Release, and address/undefined-behavior sanitizer builds. A desktop SDL window was checked for changed analog coordinates, button text, release to neutral, Home callback exit, final-frame retention after further input, and Escape closure. The PRX rebuilt identically from the unmodified pinned source. Its staged LFS pointer and stored object match SHA-256 `c4f5c88809321de3b545d48fc7598b0e5c7fe115cc7c609372b98137d35ae165` and size 160230 bytes; LFS integrity checks passed.
 
-## GE triangle milestone: checkpoint and remaining work
+## GE triangle milestone: complete
 
 Render a small SDK-linked RGB triangle through guest GU calls, GE display lists, and software rasterization into VRAM, then present it through the existing display and SDL frontend. Start with `GU_TRANSFORM_2D`: the SDK `gu/ortho` example also requires matrix transforms and rotation, which belong to a later milestone.
 
-### Initial implementation in this checkpoint
+### Initial implementation in checkpoint `82f5d15`
 
 - `src/runtime/ge.*` adds incremental command processing, queued lists, stall updates, list/draw synchronization, basic address state and JUMP, FINISH/END, finish callback registration, and a separate GE command limit using the configured instruction-budget value.
 - The draft rasterizer writes unindexed, untextured screen-space triangles and GU color-clear sprites into RGBA 8888 VRAM. It handles stride, region/scissor clipping, smooth/flat shading, winding, and VRAM address mirroring. Unsupported active features are rejected before drawing.
@@ -91,35 +91,44 @@ Render a small SDK-linked RGB triangle through guest GU calls, GE display lists,
 
 Checkpoint verification: `just homebrew`, `just build`, and `just format-check` passed. All 185 existing Debug tests passed. A headless run with a 2,000,000-instruction limit reached that limit without an earlier reported GE fault; the sample is interactive and waits for Home, so this does not establish successful completion, callback delivery, or correct pixels. Release, clang-tidy, sanitizers, and a desktop triangle check have not been run for this draft.
 
-### Remaining implementation and verification
+### Completed implementation and verification
 
-1. [ ] Add focused GE tests, then fix issues they expose before treating the implementation as complete.
+1. [x] Add focused GE tests, then fix issues they expose before treating the implementation as complete.
    - Test a list stalled at its start, queued/running/stalled/done status, FIFO ordering, stall resumption, and reuse of completed list slots. Blocking list sync must wait for its own END; draw sync must wait for all queued lists. Validate IDs, callback slots, guest pointers, and unsupported submission arguments.
    - Verify FINISH executes real guest instructions with the finish ID and common argument. Test masked and nested interrupt deferral, restoration of the interrupted thread's full CPU state and stack, ignored callback return values, and preservation of the existing sleeping exit-callback behavior.
    - Check VRAM offsets and aliases, 512-pixel stride, color byte order, region/scissor clipping, smooth and flat colors, reversed winding, degenerate triangles, and shared-edge coverage. Verify RGB clears preserve alpha and alpha-enabled clears replace it. Restrict clear sprites to the SDK's integer format if fractional clear coverage cannot be justified yet.
    - Check unsupported vertex formats, indices, 3D transforms, enabled rendering features, framebuffer formats, and primitive counts. Invalid coordinates and unmapped vertex/framebuffer ranges must fail before any VRAM changes.
    - Check malformed lists and unknown commands report the GE program counter and command word. Bound cyclic JUMP lists, including execution with every CPU thread waiting. Verify independent CPU/GE budget enforcement and vblank handoffs during GE waits.
    - Cover vblank wait timing and return values, plus the limited event-flag creation/deletion used by GU.
-2. [ ] Add execution tests for the SDK-linked triangle at load addresses `0x08800000` and `0x08900000`.
+2. [x] Add execution tests for the SDK-linked triangle at load addresses `0x08800000` and `0x08900000`.
    - Advance to display events and compare the entire visible framebuffer with an independently derived pixel expectation. Check the finish callback actually runs; the fixture's `finishes` gate provides a guest-visible condition.
    - Request Home both before and after rendering, verify guest exit and the final image, and preserve instruction-limit fault behavior.
    - Store the verified triangle PRX through Git LFS, with source location, pinned toolchain provenance, license notices, checksum, and reproducible rebuild instructions matching the existing fixtures.
-3. [ ] Check the actual SDL triangle window, Home callback exit, final-frame retention, Escape, and window close. Add an offscreen frontend test where it verifies behavior beyond the existing controller/window coverage.
-4. [ ] Document the GE implementation in `docs/runtime.md` and the triangle build/run command in `README.md`. Describe supported commands and formats, asynchronous lists and synchronization, guest callbacks, timing/budgets, unsupported features, and the provisional rasterization rules. Update the `justfile` homebrew comment to include the project-owned sample. Mark this milestone complete in this plan only after verification.
-5. [ ] Run `just ci` and fix formatting, clang-tidy, Debug/Release, and address/undefined-behavior sanitizer failures with leak detection enabled. Verify SDK submodules remain unchanged, the PRX rebuild is identical, and the staged LFS pointer and stored object agree. Commit the completed milestone separately from this checkpoint.
+3. [x] Check the actual SDL triangle window, Home callback exit, final-frame retention, Escape, and window close. Add an offscreen frontend test where it verifies behavior beyond the existing controller/window coverage.
+4. [x] Document the GE implementation in `docs/runtime.md` and the triangle build/run command in `README.md`. Describe supported commands and formats, asynchronous lists and synchronization, guest callbacks, timing/budgets, unsupported features, and the provisional rasterization rules. Update the `justfile` homebrew comment to include the project-owned sample. Mark this milestone complete in this plan only after verification.
+5. [x] Run `just ci` and fix formatting, clang-tidy, Debug/Release, and address/undefined-behavior sanitizer failures with leak detection enabled. Verify SDK submodules remain unchanged, the PRX rebuild is identical, and the staged LFS pointer and stored object agree. Commit the completed milestone separately from this checkpoint.
 
 ### Scope and known limitations
 
 - Start with one unindexed, untextured three-vertex screen-space triangle per primitive and SDK color-clear sprites. Textures, depth/stencil operations, blending, general 3D transforms, VFPU, SIGNAL/CALL/RET, list cancellation/head insertion, and saved GE contexts remain outside this milestone. Event flags currently provide only creation/deletion, not general waiting/signaling.
 - Raster coverage currently uses fixed subpixel coordinates, pixel-center edge tests, a top-left rule, and integer barycentric color interpolation. These rules are provisional, not established as bit-exact PSP behavior; hardware probes are needed before claiming that accuracy.
-- Finish interrupts are delivered through an available running guest thread. Callback scheduling while all threads are waiting, masking/nesting, and restoration need targeted verification. Completion of the submitting list wakes sync waiters; guest termination currently does not drain unfinished lists automatically.
-- No new user scope decision is pending. The next implementation step is focused GE/kernel tests and corrections, followed by triangle execution and pixel tests. The user requested this checkpoint before that work continues.
+- Finish interrupts use the selected thread or a waiting thread when the last running thread has exited. Tests verify all-waiting delivery, masking/nesting deferral, state and wait restoration, and completions during callbacks. GE interrupt callbacks cannot block or be preempted by other threads. Completion of the submitting list wakes sync waiters; guest termination does not drain unfinished lists automatically.
+- No work remains for this milestone. Textures, 3D transforms, broader GE services, and hardware raster probes require a subsequent scope.
 
 ### Resume references and commands
 
-- Completed display and controller commits are `f08e0d1` and `057caf8`; the GE checkpoint follows the latter on the current branch.
+- Completed display and controller commits are `f08e0d1` and `057caf8`; GE implementation started in checkpoint `82f5d15` and is completed separately on the same branch.
 - SDK contracts are in `third_party/pspsdk/src/ge/pspge.h`, `sceGe_user.S`, and `src/gu/guInternal.h`. Read `sceGuInit`, `sceGuStart`, `sceGuFinishId`, `sceGuDrawArray`, `sceGuGetMemory`, and `sceGuClear` for emitted command streams, stall handling, callbacks, and vertex layouts.
 - The pinned PSPDEV installation is `~/.local/opt/pspdev/v20261001`, with SDK revision `6f15c154c902963864ea5c4538cc94febf8a2dad`. Preserve the existing toolchain pin and unmodified submodule sources.
 - Primary implementation references consulted for framebuffer mirroring and raster behavior were [PPSSPP GPU state](https://github.com/hrydgard/ppsspp/blob/master/GPU/GPUState.h) and [software rasterizer](https://github.com/hrydgard/ppsspp/blob/master/GPU/Software/Rasterizer.cpp). Their hardware details need separate probes before adopting exact raster expectations.
 - Rebuild with `just homebrew` and `just build`; inspect with `./build/pspemu build-homebrew/triangle/triangle.prx --window`. Home requests guest exit; Escape closes the frontend. Run the complete required checks with `just ci` when the milestone is ready.
 - Temporary checkpoint logs are under `~/Temp/psp-triangle/`; they are local scratch files, not committed artifacts.
+
+### Completion verification (2026-10-10)
+
+- Focused tests exposed and fixed stale ready-queue entries after waking the selected idle thread. FINISH delivery now preserves interrupted waits, handles completions during callbacks, disables interrupts on entry, and defers nesting/preemption until return. Float clear sprites are rejected; SDK integer clears retain RGB/alpha behavior.
+- The SDK-linked fixture matches the independently derived scanline/color expectation over the whole framebuffer at `0x08800000` and `0x08900000`. Home requests before and after rendering terminate through the guest callbacks; the finish gate requires guest FINISH ID 7 execution. CPU and GE budgets remain independent and persist through vblank handoffs.
+- Actual desktop SDL pixel captures matched the analytic triangle exactly. Home exit retained the image after further input; Escape and window close were checked during active execution. The offscreen test compares every rendered RGB pixel at 2× scale after guest termination.
+- `just ci` passed formatting and clang-tidy, with all 208 tests passing in Debug, Release, and address/undefined-behavior sanitizer builds. Default leak detection remained enabled.
+- The triangle rebuilt byte-for-byte with the pinned toolchain. Its staged LFS pointer and stored object match SHA-256 `00db51e3ce2bb692a9af53f76fbbb13cc44987cffa45e472a4e32d612a2cc7ed` and size 162710 bytes. SDK submodules remain unchanged. Fixture provenance, SDK BSD/Newlib/GCC license notices, rebuild commands, supported GE services, and provisional raster rules are documented.
+- Verification logs and desktop captures are local scratch artifacts under `~/Temp/psp-triangle/`.

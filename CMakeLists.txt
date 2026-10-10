@@ -83,6 +83,7 @@ if(BUILD_TESTING)
         src/loader/tests/prx_reader_test.cpp
         src/runtime/tests/display_test.cpp
         src/runtime/tests/controller_test.cpp
+        src/runtime/tests/ge_test.cpp
         src/runtime/tests/execution_test.cpp
         src/runtime/tests/guest_structures_test.cpp
         src/runtime/tests/kernel_test.cpp

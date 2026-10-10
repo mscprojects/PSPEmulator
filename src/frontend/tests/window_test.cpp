@@ -1,6 +1,7 @@
 #include "frontend/window.hpp"
 
 #include "loader/tests/prx_fixture.hpp"
+#include "runtime/tests/triangle_fixture.hpp"
 
 #include <gtest/gtest.h>
 
@@ -189,6 +190,50 @@ TEST(WindowTest, HomeQueuesOneGuestExitRequestAndIgnoresKeyRepeat)
     ASSERT_TRUE(window.poll());
     EXPECT_FALSE(window.take_exit_request());
     EXPECT_EQ(window.controller(), ControllerState{});
+}
+
+TEST(WindowTest, TriangleFinishesThroughGuestCallbacksAndRetainsExpectedPixelsUntilEscape)
+{
+    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/triangle.prx", std::ios::binary);
+    ASSERT_TRUE(input.is_open());
+    const Payload bytes{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    Execution execution(read_prx(bytes));
+    Window window;
+    SDL_Event event{};
+    event.type = SDL_EVENT_KEY_DOWN;
+    event.key.key = SDLK_HOME;
+    ASSERT_TRUE(SDL_PushEvent(&event));
+    const auto timer = SDL_AddTimer(500, close_after_delay, nullptr);
+    ASSERT_NE(timer, 0U);
+    EXPECT_EQ(run_windowed(execution, window), 0);
+    SDL_RemoveTimer(timer);
+    EXPECT_EQ(execution.result().exit_code, 0);
+    const auto expected = test::triangle_pixels();
+    EXPECT_EQ(Payload(execution.pixels().begin(), execution.pixels().end()), expected);
+    auto *native_window = only_window();
+    ASSERT_NE(native_window, nullptr);
+    auto *renderer = SDL_GetRenderer(native_window);
+    ASSERT_NE(renderer, nullptr);
+    const std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)> raw(SDL_RenderReadPixels(renderer, nullptr),
+                                                                          SDL_DestroySurface);
+    ASSERT_NE(raw, nullptr) << SDL_GetError();
+    const std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)> rgba(
+        SDL_ConvertSurface(raw.get(), SDL_PIXELFORMAT_RGBA32), SDL_DestroySurface);
+    ASSERT_NE(rgba, nullptr) << SDL_GetError();
+    ASSERT_EQ(rgba->w, 960);
+    ASSERT_EQ(rgba->h, 544);
+    const auto *pixels = static_cast<const std::uint8_t *>(rgba->pixels);
+    for (int y = 0; y < rgba->h; ++y)
+    {
+        for (int x = 0; x < rgba->w; ++x)
+        {
+            for (int channel = 0; channel < 3; ++channel)
+            {
+                ASSERT_EQ(pixels[y * rgba->pitch + x * 4 + channel], expected[(y / 2 * 480 + x / 2) * 4 + channel])
+                    << "at " << x << "," << y << " channel " << channel;
+            }
+        }
+    }
 }
 
 TEST(WindowTest, ControllerSampleExitsThroughHomeAndRetainsWindowUntilEscape)

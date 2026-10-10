@@ -769,4 +769,163 @@ TEST(KernelTest, CallbackValidationRejectsInvalidEntriesIdsAndInsufficientStack)
     EXPECT_EQ(kernel.current_thread_state(), saved);
 }
 
+TEST(KernelTest, GeInterruptPreservesIdleWaitAndCompletionsDuringItsExecution)
+{
+    // Both orders matter: completion during an interrupt and after its return.
+    for (const auto kind : {0, 1, 2, 3})
+    {
+        for (const auto complete_during : {false, true})
+        {
+            SCOPED_TRACE(kind);
+            SCOPED_TRACE(complete_during);
+            Memory memory(GuestAddress{0}, 0x40000);
+            Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+            kernel.initialize(GuestAddress{0x400}, {});
+            const auto id = kernel.current_thread_id();
+            auto saved = kernel.current_thread_state();
+            if (kind == 0)
+                kernel.wait_ge();
+            if (kind == 1)
+                kernel.wait_controller();
+            if (kind == 2)
+                kernel.delay_thread(10);
+            if (kind == 3)
+                kernel.wait_vblank();
+            ASSERT_EQ(kernel.select_next_thread(0), ThreadSelection::Idle);
+            ASSERT_TRUE(kernel.enter_interrupt_callback(GuestAddress{0x800}, 7, GuestAddress{0x900}));
+            EXPECT_FALSE(kernel.interrupts_enabled());
+            EXPECT_FALSE(kernel.enter_interrupt_callback(GuestAddress{0x800}, 8, GuestAddress{0}));
+            EXPECT_THROW(kernel.delay_thread(0), std::logic_error);
+            EXPECT_THROW(kernel.wait_ge(), std::logic_error);
+            EXPECT_THROW(kernel.wait_controller(), std::logic_error);
+            EXPECT_THROW(kernel.sleep_thread_callbacks(), std::runtime_error);
+            EXPECT_THROW(kernel.exit_thread(), std::runtime_error);
+            const auto complete = [&]
+            {
+                if (kind == 0)
+                    kernel.wake_ge(id);
+                if (kind == 1)
+                    kernel.wake_controller(id);
+                if (kind == 2)
+                    kernel.advance_time(10);
+                if (kind == 3)
+                    kernel.advance_time(16'684);
+            };
+            if (complete_during)
+            {
+                complete();
+                ASSERT_EQ(kernel.select_next_thread(kernel.system_time()), ThreadSelection::Ready);
+            }
+            auto &state = kernel.current_thread_state();
+            state.registers[2] = 99; // A GE interrupt's return value never deletes callbacks.
+            state.program_counter = GuestAddress{state.registers[31]};
+            if (!complete_during)
+            {
+                ASSERT_EQ(kernel.select_next_thread(0), ThreadSelection::Idle);
+                EXPECT_EQ(state, saved);
+                complete();
+            }
+            ASSERT_EQ(kernel.select_next_thread(kernel.system_time()), ThreadSelection::Ready);
+            saved.registers[2] = kind == 1 ? 1 : 0;
+            EXPECT_EQ(state, saved);
+            EXPECT_TRUE(kernel.interrupts_enabled());
+            kernel.wait_ge(); // No stale ready entry may resume this later wait.
+            EXPECT_EQ(kernel.select_next_thread(kernel.system_time()), ThreadSelection::Idle);
+        }
+    }
+}
+
+TEST(KernelTest, GeInterruptDefersHigherPriorityThreadsUntilItsReturn)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    kernel.initialize(GuestAddress{0x400}, {});
+    const auto main = kernel.current_thread_id();
+    ASSERT_TRUE(kernel.enter_interrupt_callback(GuestAddress{0x800}, 7, GuestAddress{0}));
+    const auto high = kernel.create_thread({GuestAddress{0x900}, 0x1000, 0x10, "high", 0});
+    kernel.start_thread(high, GuestAddress{0}, 0);
+    // Even a guest re-enable cannot permit nested GE callbacks or thread preemption.
+    kernel.resume_interrupts(1);
+    EXPECT_FALSE(kernel.enter_interrupt_callback(GuestAddress{0x800}, 8, GuestAddress{0}));
+    EXPECT_EQ(kernel.select_next_thread(0), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_id(), main);
+    auto &state = kernel.current_thread_state();
+    state.program_counter = GuestAddress{state.registers[31]};
+    ASSERT_EQ(kernel.select_next_thread(0), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_id(), high);
+    kernel.exit_thread();
+    ASSERT_EQ(kernel.select_next_thread(0), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_id(), main);
+}
+
+TEST(KernelTest, GeInterruptUsesAWaitingThreadAfterTheLastRunningThreadExits)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    kernel.initialize(GuestAddress{0x400}, {});
+    const auto main = kernel.current_thread_id();
+    const auto worker = kernel.create_thread({GuestAddress{0x900}, 0x1000, 0x30, "worker", 0});
+    kernel.start_thread(worker, GuestAddress{0}, 0);
+    kernel.wait_ge();
+    ASSERT_EQ(kernel.select_next_thread(0), ThreadSelection::Ready);
+    ASSERT_EQ(kernel.current_thread_id(), worker);
+    kernel.exit_thread();
+    ASSERT_EQ(kernel.select_next_thread(0), ThreadSelection::Idle);
+    EXPECT_TRUE(kernel.interrupt_callback_ready());
+    ASSERT_TRUE(kernel.enter_interrupt_callback(GuestAddress{0x800}, 7, GuestAddress{0}));
+    EXPECT_EQ(kernel.current_thread_id(), main);
+    kernel.wake_ge(main);
+    auto &state = kernel.current_thread_state();
+    state.program_counter = GuestAddress{state.registers[31]};
+    ASSERT_EQ(kernel.select_next_thread(0), ThreadSelection::Ready);
+    EXPECT_EQ(state.program_counter, GuestAddress{0x400});
+    EXPECT_EQ(state.registers[2], 0U);
+}
+
+TEST(KernelTest, GeInterruptDefersWhileAnExitCallbackWaitsAndAllowsTimeToAdvance)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    kernel.initialize(GuestAddress{0x400}, {});
+    const auto callback = kernel.create_callback(GuestAddress{0x800}, GuestAddress{0});
+    kernel.register_exit_callback(callback);
+    kernel.sleep_thread_callbacks();
+    kernel.request_exit();
+    ASSERT_EQ(kernel.select_next_thread(0), ThreadSelection::Ready);
+    kernel.delay_thread(10);
+    EXPECT_FALSE(kernel.interrupt_callback_ready());
+    EXPECT_FALSE(kernel.enter_interrupt_callback(GuestAddress{0x900}, 7, GuestAddress{0}));
+    ASSERT_EQ(kernel.select_next_thread(10), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.system_time(), 10U);
+    auto &state = kernel.current_thread_state();
+    state.registers[2] = 0;
+    state.program_counter = GuestAddress{state.registers[31]};
+    ASSERT_EQ(kernel.select_next_thread(10), ThreadSelection::Idle);
+    EXPECT_TRUE(kernel.interrupt_callback_ready());
+    EXPECT_TRUE(kernel.enter_interrupt_callback(GuestAddress{0x900}, 7, GuestAddress{0}));
+}
+
+TEST(KernelTest, VblankWaitTargetsTheNextEdgeAndEventFlagIdsAreValidated)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    kernel.initialize(GuestAddress{0x400}, {});
+    for (const auto edge : {16'684U, 33'367U, 50'050U})
+    {
+        kernel.current_thread_state().registers[2] = 123;
+        kernel.wait_vblank();
+        EXPECT_EQ(kernel.thread_status(0).wait_type.value(), 12U);
+        ASSERT_EQ(kernel.select_next_thread(edge), ThreadSelection::Ready);
+        EXPECT_EQ(kernel.system_time(), edge);
+        EXPECT_EQ(kernel.current_thread_state().registers[2], 0U);
+    }
+    memory.write_bytes(GuestAddress{0x800}, Payload{'G', 'U', 0});
+    const auto id = kernel.create_event_flag({GuestAddress{0x800}, 0x200, 3, GuestAddress{0}});
+    kernel.delete_event_flag(id);
+    EXPECT_THROW(kernel.delete_event_flag(id), std::runtime_error);
+    EXPECT_THROW(kernel.create_event_flag({GuestAddress{0x800}, 1, 3, GuestAddress{0}}), std::runtime_error);
+    EXPECT_THROW(kernel.create_event_flag({GuestAddress{0x800}, 0x200, 3, GuestAddress{4}}), std::runtime_error);
+    EXPECT_THROW(kernel.create_event_flag({GuestAddress{0x40000}, 0x200, 3, GuestAddress{0}}), std::out_of_range);
+}
+
 } // namespace psp::detail

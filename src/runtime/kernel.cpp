@@ -110,9 +110,13 @@ ThreadSelection Kernel::select_next_thread(std::uint64_t idle_deadline)
         const auto remove = thread.state.registers[2] != 0;
         thread.state = thread.callback->state;
         thread.state.load_linked = false;
+        thread.lifecycle = thread.callback->lifecycle;
+        thread.wait = thread.callback->wait;
+        if (!callback_id)
+        {
+            interrupts_enabled_ = thread.callback->interrupts_enabled;
+        }
         thread.callback.reset();
-        thread.lifecycle = callback_id ? Lifecycle::Waiting : Lifecycle::Started;
-        thread.wait = callback_id ? Wait::SleepCallback : Wait::None;
         if (remove && callback_id)
         {
             callbacks_.erase(*callback_id);
@@ -126,9 +130,19 @@ ThreadSelection Kernel::select_next_thread(std::uint64_t idle_deadline)
     {
         thread.lifecycle = Lifecycle::Finished;
     }
+    // A GE/controller event can wake the selected idle thread between selections.
+    // It is already running once awakened; consume its ready-queue entry here.
+    if (thread.lifecycle == Lifecycle::Started)
+    {
+        std::erase(ready_, current_thread_);
+    }
     const bool select_ready = thread.lifecycle != Lifecycle::Started;
     wake_delayed_threads();
     wake_callbacks();
+    if (thread.callback && !thread.callback->id)
+    {
+        return ThreadSelection::Ready;
+    }
     if (select_ready)
     {
         if (ready_.empty() &&
@@ -190,7 +204,7 @@ void Kernel::delay_thread(std::uint32_t microseconds)
         throw std::overflow_error("Guest delay exceeds clock range");
     }
     auto &thread = threads_.at(current_thread_);
-    if (thread.lifecycle != Lifecycle::Started)
+    if (thread.lifecycle != Lifecycle::Started || (thread.callback && !thread.callback->id))
     {
         throw std::logic_error("Only a running thread can delay");
     }
@@ -202,7 +216,7 @@ void Kernel::delay_thread(std::uint32_t microseconds)
 void Kernel::wait_controller()
 {
     auto &thread = threads_.at(current_thread_);
-    if (thread.lifecycle != Lifecycle::Started)
+    if (thread.lifecycle != Lifecycle::Started || (thread.callback && !thread.callback->id))
     {
         throw std::logic_error("Only a running thread can wait for a controller sample");
     }
@@ -212,21 +226,13 @@ void Kernel::wait_controller()
 
 void Kernel::wake_controller(std::uint32_t id)
 {
-    auto &thread = threads_.at(id);
-    if (thread.lifecycle != Lifecycle::Waiting || thread.wait != Wait::Controller)
-    {
-        throw std::logic_error("Thread is not waiting for a controller sample");
-    }
-    thread.state.registers[2] = 1;
-    thread.lifecycle = Lifecycle::Started;
-    thread.wait = Wait::None;
-    ready_.push_back(id);
+    complete_wait(id, Wait::Controller, 1);
 }
 
 void Kernel::wait_ge()
 {
     auto &thread = threads_.at(current_thread_);
-    if (thread.lifecycle != Lifecycle::Started)
+    if (thread.lifecycle != Lifecycle::Started || (thread.callback && !thread.callback->id))
     {
         throw std::logic_error("Only a running thread can wait for the GE");
     }
@@ -236,15 +242,7 @@ void Kernel::wait_ge()
 
 void Kernel::wake_ge(std::uint32_t id)
 {
-    auto &thread = threads_.at(id);
-    if (thread.lifecycle != Lifecycle::Waiting || thread.wait != Wait::Ge)
-    {
-        throw std::logic_error("Thread is not waiting for the GE");
-    }
-    thread.state.registers[2] = 0;
-    thread.lifecycle = Lifecycle::Started;
-    thread.wait = Wait::None;
-    ready_.push_back(id);
+    complete_wait(id, Wait::Ge, 0);
 }
 
 void Kernel::wait_vblank()
@@ -306,18 +304,43 @@ void Kernel::request_exit()
     exit_requested_ = false;
 }
 
+bool Kernel::interrupt_callback_ready() const
+{
+    return interrupts_enabled_ &&
+           !std::ranges::any_of(threads_, [](const auto &item) { return static_cast<bool>(item.second.callback); }) &&
+           std::ranges::any_of(
+               threads_, [](const auto &item)
+               { return item.second.lifecycle == Lifecycle::Started || item.second.lifecycle == Lifecycle::Waiting; });
+}
+
 bool Kernel::enter_interrupt_callback(GuestAddress entry, std::uint32_t argument, GuestAddress common)
 {
-    auto &thread = threads_.at(current_thread_);
-    if (thread.lifecycle != Lifecycle::Started)
-    {
-        throw std::logic_error("Interrupt callback needs a ready thread");
-    }
-    if (!interrupts_enabled_ || thread.callback)
+    if (!interrupt_callback_ready())
     {
         return false;
     }
+    // The last running thread may have exited while other threads still wait.
+    // Use the highest-priority waiting thread as the idle interrupt context.
+    if (threads_.at(current_thread_).lifecycle == Lifecycle::Finished)
+    {
+        std::optional<std::uint32_t> selected;
+        for (const auto &[id, candidate] : threads_)
+        {
+            if (candidate.lifecycle == Lifecycle::Waiting &&
+                (!selected || candidate.creation.priority < threads_.at(*selected).creation.priority))
+            {
+                selected = id;
+            }
+        }
+        if (!selected)
+        {
+            return false;
+        }
+        current_thread_ = *selected;
+    }
+    auto &thread = threads_.at(current_thread_);
     begin_callback(thread, entry, {argument, common.value_of(), 0}, std::nullopt);
+    interrupts_enabled_ = false;
     return true;
 }
 
@@ -395,6 +418,11 @@ bool Kernel::interrupts_enabled() const
 
 void Kernel::exit_thread()
 {
+    const auto &thread = threads_.at(current_thread_);
+    if (thread.callback && !thread.callback->id)
+    {
+        throw std::runtime_error("Exiting a thread from a GE interrupt callback is unsupported");
+    }
     threads_.at(current_thread_).lifecycle = Lifecycle::Finished;
 }
 
@@ -696,11 +724,9 @@ void Kernel::wake_delayed_threads()
     while (!delayed_.empty() && delayed_.begin()->first <= system_time_)
     {
         const auto id = delayed_.begin()->second;
-        auto &thread = threads_.at(id);
-        thread.state.registers[2] = 0; // sceKernelDelayThread completed successfully.
-        thread.lifecycle = Lifecycle::Started;
-        thread.wait = Wait::None;
-        ready_.push_back(id);
+        const auto &thread = threads_.at(id);
+        const auto wait = thread.callback && !thread.callback->id ? thread.callback->wait : thread.wait;
+        complete_wait(id, wait, 0);
         delayed_.erase(delayed_.begin());
     }
 }
@@ -721,6 +747,31 @@ void Kernel::wake_callbacks()
     }
 }
 
+void Kernel::complete_wait(std::uint32_t id, Wait wait, std::uint32_t result)
+{
+    auto &thread = threads_.at(id);
+    if (thread.callback && !thread.callback->id)
+    {
+        auto &interrupted = *thread.callback;
+        if (interrupted.lifecycle != Lifecycle::Waiting || interrupted.wait != wait)
+        {
+            throw std::logic_error("Interrupted thread is not waiting for this event");
+        }
+        interrupted.state.registers[2] = result;
+        interrupted.lifecycle = Lifecycle::Started;
+        interrupted.wait = Wait::None;
+        return;
+    }
+    if (thread.lifecycle != Lifecycle::Waiting || thread.wait != wait)
+    {
+        throw std::logic_error("Thread is not waiting for this event");
+    }
+    thread.state.registers[2] = result;
+    thread.lifecycle = Lifecycle::Started;
+    thread.wait = Wait::None;
+    ready_.push_back(id);
+}
+
 void Kernel::begin_callback(Thread &thread, GuestAddress entry, std::array<std::uint32_t, 3> arguments,
                             std::optional<std::uint32_t> id)
 {
@@ -736,7 +787,7 @@ void Kernel::begin_callback(Thread &thread, GuestAddress entry, std::array<std::
     {
         throw std::runtime_error("Insufficient thread stack for callback entry");
     }
-    thread.callback = CallbackContext{thread.state, id};
+    thread.callback = CallbackContext{thread.state, id, thread.lifecycle, thread.wait, interrupts_enabled_};
     thread.state.program_counter = entry;
     thread.state.next_program_counter = GuestAddress{entry.value_of() + 4};
     std::ranges::copy(arguments, thread.state.registers.begin() + 4);
@@ -744,6 +795,7 @@ void Kernel::begin_callback(Thread &thread, GuestAddress entry, std::array<std::
     thread.state.registers[31] = return_address_.value_of() + 4;
     thread.state.load_linked = false;
     thread.lifecycle = Lifecycle::Started;
+    thread.wait = Wait::None;
 }
 
 GuestMutexWorkArea Kernel::mutex_work_area(GuestAddress address) const

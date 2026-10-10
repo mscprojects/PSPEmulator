@@ -68,7 +68,8 @@ public:
     // Execute at most one command. The separate command budget also bounds idle
     // GPU loops, which cannot consume the CPU instruction budget.
     void step();
-    void deliver_interrupt();
+    bool interrupt_pending() const;
+    bool deliver_interrupt();
 
 private:
     std::uint32_t status(std::uint32_t id) const;

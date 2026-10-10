@@ -44,3 +44,17 @@ just test
 ```
 
 Tests run it at two load addresses, compare its analog and button text against frozen rows from the pinned MSX font, release input back to neutral, and request exit. Successful termination requires the guest callback to write the sample's `done` variable and main to call `sceKernelExitGame`. An early exit request also verifies registration and callback-enabled sleep. The integration test covers the optional right-stick fields through the SDL-independent execution API; the keyboard frontend controls only the left stick. The sample's `Cicle pressed` spelling is preserved. Keyboard controls are documented in the [project README](../../../../README.md).
+
+## GU triangle
+
+`triangle.prx` is the project-owned [triangle sample](../../../../homebrew/triangle/main.c), linked against PSPSDK with the same pinned PSPDEV release and SDK/GCC/Newlib revisions above. Its [Makefile](../../../../homebrew/triangle/Makefile) builds it through `just homebrew`. Its SHA-256 is `00db51e3ce2bb692a9af53f76fbbb13cc44987cffa45e472a4e32d612a2cc7ed`. The fixture is stored in Git LFS; its linked SDK, Newlib, and GCC runtime code is covered by the license notices above. The SDK BSD license is also reproduced in [COPYING.PSPSDK](COPYING.PSPSDK) for binary redistribution.
+
+```sh
+just homebrew
+cp build-homebrew/triangle/triangle.prx src/runtime/tests/fixtures/triangle.prx
+sha256sum src/runtime/tests/fixtures/triangle.prx
+just test
+./build/pspemu src/runtime/tests/fixtures/triangle.prx --window
+```
+
+The sample clears a 512-pixel-stride RGBA 8888 framebuffer, draws a screen-space triangle with red/green/blue vertices at (240,40), (80,232), and (400,232), and submits finish ID 7. It waits for list synchronization, swaps buffers, and requires its actual guest finish callback before it can exit through Home. Tests load it at `0x08800000` and `0x08900000`, compare every visible pixel with an independently calculated scanline/color expectation, request Home before and after rendering, and verify successful exit and final-frame retention. The analytic expectation checks the emulator's documented provisional raster rules; it is not a hardware capture.

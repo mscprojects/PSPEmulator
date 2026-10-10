@@ -98,6 +98,9 @@ class Kernel
     {
         CpuState state;
         std::optional<std::uint32_t> id;
+        Lifecycle lifecycle;
+        Wait wait;
+        bool interrupts_enabled;
     };
 
     struct Thread
@@ -161,8 +164,11 @@ public:
     // Queue a notification; guest code runs only in its owner's callback-enabled sleep.
     // An early request is retained until an exit callback is registered.
     void request_exit();
-    // Run a GE interrupt callback on the selected ready thread. Returns false
-    // while interrupts are masked or another callback is active; callers retain it.
+    bool interrupt_callback_ready() const;
+    // Run a GE interrupt callback on the selected thread, preserving an idle wait.
+    // Interrupt callbacks cannot block or be preempted by another thread. Returns false
+    // while interrupts are masked, any callback is active, or no live thread remains.
+    // Callers retain deferred notifications.
     bool enter_interrupt_callback(GuestAddress entry, std::uint32_t argument, GuestAddress common);
     // Runtime currently advances one microsecond per instruction, a provisional
     // deterministic rate rather than a cycle-accurate CPU clock.
@@ -206,6 +212,7 @@ private:
     void place_arguments(Thread &thread, PayloadSpan arguments);
     void wake_delayed_threads();
     void wake_callbacks();
+    void complete_wait(std::uint32_t id, Wait wait, std::uint32_t result);
     void begin_callback(Thread &thread, GuestAddress entry, std::array<std::uint32_t, 3> arguments,
                         std::optional<std::uint32_t> id);
     GuestMutexWorkArea mutex_work_area(GuestAddress address) const;

@@ -110,7 +110,8 @@ std::uint32_t Ge::enqueue(const GeSubmission &submission)
     }
     for (std::size_t id = 0; id < lists_.size(); ++id)
     {
-        if (!lists_[id] || lists_[id]->done)
+        const auto &slot = lists_[id];
+        if (!slot || slot->done)
         {
             lists_[id] = List{address, stall, callback};
             queue_.push_back(static_cast<std::uint32_t>(id));
@@ -147,7 +148,14 @@ std::optional<std::uint32_t> Ge::draw_sync(std::uint32_t mode)
 
 bool Ge::runnable() const
 {
-    return !queue_.empty() && lists_[queue_.front()]->pc != lists_[queue_.front()]->stall;
+    if (queue_.empty())
+    {
+        return false;
+    }
+    // enqueue() initializes a slot before queuing it; END removes it before reuse.
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    const auto &list = lists_[queue_.front()].value();
+    return list.pc != list.stall;
 }
 
 void Ge::step()
@@ -157,7 +165,9 @@ void Ge::step()
         return;
     }
     const auto id = queue_.front();
-    auto &list = *lists_[id];
+    // runnable() has already read this occupied slot on the same thread.
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    auto &list = lists_[id].value();
     const auto pc = list.pc;
     std::optional<std::uint32_t> word;
     try
@@ -187,7 +197,12 @@ void Ge::step()
     }
 }
 
-void Ge::deliver_interrupt()
+bool Ge::interrupt_pending() const
+{
+    return !interrupts_.empty();
+}
+
+bool Ge::deliver_interrupt()
 {
     if (!interrupts_.empty())
     {
@@ -195,8 +210,10 @@ void Ge::deliver_interrupt()
         if (kernel_.enter_interrupt_callback(interrupt.callback.finish, interrupt.argument, interrupt.callback.common))
         {
             interrupts_.pop_front();
+            return true;
         }
     }
+    return false;
 }
 
 std::uint32_t Ge::status(std::uint32_t id) const
@@ -319,7 +336,8 @@ void Ge::draw(std::uint32_t primitive)
     const auto clearing = (registers_[0xD3] & 1U) != 0;
     const auto format = registers_[0x12];
     const bool floating = format == 0x80019CU; // RGBA8888 + float XYZ + through mode.
-    if ((!floating && format != 0x80011CU) || (clearing ? type != 6 || count != 2 : type != 3 || count != 3))
+    if ((!floating && format != 0x80011CU) ||
+        (clearing ? floating || type != 6 || count != 2 : type != 3 || count != 3))
     {
         throw std::runtime_error("GE supports one unindexed 2D triangle or one clear sprite per PRIM");
     }
@@ -455,6 +473,8 @@ void Ge::clear(const std::array<Vertex, 2> &vertices)
     }
 }
 
+// Coordinates and the packed RGBA value are distinct fields of a pixel write.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 void Ge::write_pixel(int x, int y, std::uint32_t color, bool clearing)
 {
     const auto address = GuestAddress{framebuffer_.value_of() +

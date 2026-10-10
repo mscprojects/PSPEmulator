@@ -39,7 +39,9 @@ ExecutionEvent Runtime::advance()
             return ExecutionEvent::Vblank;
         }
         const auto gpu_running = ge_.runnable();
-        const auto selection = kernel_.select_next_thread(gpu_running ? kernel_.system_time() : next_vblank_);
+        const auto interrupt_ready = ge_.interrupt_pending() && kernel_.interrupt_callback_ready();
+        const auto selection =
+            kernel_.select_next_thread(gpu_running || interrupt_ready ? kernel_.system_time() : next_vblank_);
         if (selection == ThreadSelection::Finished)
         {
             display_.capture();
@@ -54,7 +56,8 @@ ExecutionEvent Runtime::advance()
         // One GE command and one CPU instruction can progress in the same guest
         // microsecond. GPU-only work advances time without consuming CPU instructions.
         ge_.step();
-        if (selection == ThreadSelection::Idle)
+        const auto interrupt_delivered = ge_.deliver_interrupt();
+        if (selection == ThreadSelection::Idle && !interrupt_delivered)
         {
             if (gpu_running)
             {
@@ -62,7 +65,6 @@ ExecutionEvent Runtime::advance()
             }
             continue;
         }
-        ge_.deliver_interrupt();
         auto &state = kernel_.current_thread_state();
         const auto pc = state.program_counter;
         try

@@ -64,7 +64,7 @@ setup-pspdev:
     PSPDEV="$staging/pspdev" "$staging/pspdev/bin/psp-gcc" --version
     mv "$staging/pspdev" "$installation"
 
-# Build unmodified SDK examples as PRXs outside the submodule.
+# Build unmodified SDK examples and the project triangle as PRXs outside the submodule.
 homebrew: setup-pspdev
     #!/usr/bin/env bash
     set -euo pipefail

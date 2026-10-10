@@ -1,6 +1,7 @@
 #include "runtime/execution.hpp"
 
 #include "loader/tests/prx_fixture.hpp"
+#include "runtime/tests/triangle_fixture.hpp"
 
 #include <gtest/gtest.h>
 
@@ -653,6 +654,110 @@ TEST(ExecutionTest, RejectsInvalidOptionsAndInsufficientRuntimeMemory)
     options.memory_size = 0x01800000;
     options.arguments = {std::string("bad\0argument", 12)};
     EXPECT_THROW(execute_prx(parsed, options), std::invalid_argument);
+}
+
+TEST(ExecutionTest, GeCycleDuringBlockingListSyncYieldsAtVblankAndExhaustsItsOwnBudget)
+{
+    ServicePrxFixture program("sceGe_user", {0xAB49E76A, 0x03444EB4});
+    program.fixture.word(0x570, 0x10080000); // BASE
+    program.fixture.word(0x574, 0x08800474); // JUMP to itself at load address + 0x474.
+    program.argument(0, 0x08800470);
+    program.argument(1, 0);
+    program.argument(2, 0xFFFFFFFF);
+    program.argument(3, 0);
+    program.call(0);
+    program.instruction(0x00402021); // move a0,v0: wait on the returned list ID.
+    program.argument(1, 0);
+    program.call(1);
+    ExecutionOptions options;
+    options.max_instructions = 30'000;
+    Execution execution(program.finish(), options);
+    ASSERT_EQ(execution.advance(), ExecutionEvent::Vblank);
+    EXPECT_EQ(execution.guest_time(), 16'684U);
+    try
+    {
+        execution.advance();
+        FAIL() << "Expected bounded GE cycle";
+    }
+    catch (const std::runtime_error &error)
+    {
+        const std::string message(error.what());
+        EXPECT_NE(message.find("GE command budget exhausted"), std::string::npos);
+        EXPECT_NE(message.find("at 0x8800474"), std::string::npos);
+    }
+}
+
+TEST(ExecutionTest, SdkTriangleRendersExpectedPixelsAndExitsThroughCallbacksAtDifferentAddresses)
+{
+    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/triangle.prx", std::ios::binary);
+    ASSERT_TRUE(input.is_open());
+    const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    const auto parsed = read_prx(payload);
+    const auto expected = test::triangle_pixels();
+    for (const auto base : {0x08800000U, 0x08900000U})
+    {
+        for (const auto early_exit : {false, true})
+        {
+            SCOPED_TRACE(base);
+            SCOPED_TRACE(early_exit);
+            ExecutionOptions options;
+            options.load_address = GuestAddress{base};
+            options.max_instructions = 2'000'000;
+            Execution execution(parsed, options);
+            if (early_exit)
+                execution.request_exit();
+            auto event = ExecutionEvent::Vblank;
+            bool rendered = false;
+            for (unsigned frame = 0; frame < 100 && event != ExecutionEvent::Finished; ++frame)
+            {
+                event = execution.advance();
+                if (execution.pixels().size() == expected.size() &&
+                    std::equal(execution.pixels().begin(), execution.pixels().end(), expected.begin()))
+                {
+                    rendered = true;
+                    if (!early_exit)
+                        execution.request_exit();
+                }
+            }
+            ASSERT_EQ(event, ExecutionEvent::Finished);
+            EXPECT_TRUE(rendered);
+            // main cannot exit until callbackFin calls the guest's finish_callback(7).
+            EXPECT_EQ(execution.result().exit_code, 0);
+            EXPECT_EQ(execution.result().output, "");
+            EXPECT_LT(execution.result().instructions_executed, options.max_instructions);
+            EXPECT_EQ(Payload(execution.pixels().begin(), execution.pixels().end()), expected);
+            execution.set_controller({0xFFFF, 0, 255});
+            execution.request_exit();
+            EXPECT_EQ(execution.advance(), ExecutionEvent::Finished);
+            EXPECT_EQ(Payload(execution.pixels().begin(), execution.pixels().end()), expected);
+        }
+    }
+}
+
+TEST(ExecutionTest, SdkTriangleRetainsOverallCpuBudgetWhileWaitingForHome)
+{
+    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/triangle.prx", std::ios::binary);
+    ASSERT_TRUE(input.is_open());
+    const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    ExecutionOptions options;
+    options.max_instructions = 25'000;
+    Execution execution(read_prx(payload), options);
+    bool rendered = false;
+    try
+    {
+        for (unsigned frame = 0; frame < 5000; ++frame)
+        {
+            ASSERT_EQ(execution.advance(), ExecutionEvent::Vblank);
+            rendered = rendered || execution.pixels().size() == std::size_t{480} * 272 * 4;
+        }
+        FAIL() << "Expected instruction budget fault";
+    }
+    catch (const std::runtime_error &error)
+    {
+        EXPECT_NE(std::string(error.what()).find("Instruction budget exhausted"), std::string::npos);
+        EXPECT_NE(std::string(error.what()).find("PRX execution at"), std::string::npos);
+    }
+    EXPECT_TRUE(rendered);
 }
 
 TEST(ExecutionTest, SdkScreenHelloWorldRendersExpectedPixelsAtDifferentAddresses)
