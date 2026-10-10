@@ -28,6 +28,24 @@ std::optional<std::uint64_t> vblank_after(std::uint64_t time)
     return start + offset;
 }
 
+// Delays, vblank waits, and vblank controller samples end as guest time passes.
+// Callback notifications need host input; GE completion needs GE work.
+bool guest_time_ends_wait(Kernel::Wait reason)
+{
+    switch (reason)
+    {
+    case Kernel::Wait::Delay:
+    case Kernel::Wait::Vblank:
+    case Kernel::Wait::Controller:
+        return true;
+    case Kernel::Wait::None:
+    case Kernel::Wait::SleepCallback:
+    case Kernel::Wait::Ge:
+        return false;
+    }
+    throw std::logic_error("Unknown thread wait reason");
+}
+
 } // namespace
 
 Kernel::Kernel(Memory &memory, AddressRange allocatable, GuestAddress global_pointer)
@@ -210,11 +228,19 @@ void Kernel::delay_thread(std::uint32_t microseconds)
 
 void Kernel::wait(Wait reason)
 {
-    if (reason != Wait::Controller && reason != Wait::Ge)
+    switch (reason)
     {
-        throw std::invalid_argument("This wait reason has its own kernel service");
+    case Wait::Controller:
+    case Wait::Ge:
+        block_current_thread(reason);
+        return;
+    case Wait::None:
+    case Wait::SleepCallback:
+    case Wait::Delay:
+    case Wait::Vblank:
+        break;
     }
-    block_current_thread(reason);
+    throw std::invalid_argument("This wait reason has its own kernel service");
 }
 
 void Kernel::wake(std::uint32_t id, Wait reason, std::uint32_t result)
@@ -316,8 +342,7 @@ bool Kernel::untimed_waits_only() const
     {
         const auto &thread = item.second;
         return thread.lifecycle == Lifecycle::Created || thread.lifecycle == Lifecycle::Finished ||
-               (thread.lifecycle == Lifecycle::Waiting && !thread.callback &&
-                (thread.wait == Wait::SleepCallback || thread.wait == Wait::Ge));
+               (thread.lifecycle == Lifecycle::Waiting && !thread.callback && !guest_time_ends_wait(thread.wait));
     };
     return !exit_code_ && std::ranges::all_of(threads_, untimed) &&
            std::ranges::none_of(callbacks_, [](const auto &item) { return item.second.notifications != 0; });
@@ -461,7 +486,7 @@ GuestThreadInfo Kernel::thread_status(std::uint32_t id) const
     if (thread.lifecycle == Lifecycle::Waiting)
     {
         status = ThreadStatus::Waiting;
-        // PSP sleep/delay wait types; controller waits use an event flag approximation.
+        // PSP sleep/delay wait types; controller and GE waits use an event flag approximation.
         switch (thread.wait)
         {
         case Wait::SleepCallback:
@@ -473,9 +498,12 @@ GuestThreadInfo Kernel::thread_status(std::uint32_t id) const
         case Wait::Vblank:
             info.wait_type = 12;
             break;
-        default:
+        case Wait::Controller:
+        case Wait::Ge:
             info.wait_type = 4;
             break;
+        case Wait::None:
+            throw std::logic_error("Waiting thread has no wait reason");
         }
     }
     info.status = static_cast<std::uint32_t>(status);

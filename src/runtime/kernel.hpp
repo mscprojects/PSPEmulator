@@ -74,7 +74,8 @@ class Kernel
 {
 public:
     // Why a thread is blocked. Delays, vblank waits, and callback-enabled sleep have
-    // their own services; other waits use wait() and end through wake().
+    // their own services; other waits use wait() and end through wake(). Switches over
+    // Wait have no default, so the compiler flags each place a new reason must be handled.
     enum class Wait : std::uint8_t
     {
         None,
