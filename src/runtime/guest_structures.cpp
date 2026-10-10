@@ -42,4 +42,11 @@ void write_controller_data(Memory &memory, GuestAddress address, const GuestCont
     memory.write_bytes(address, std::bit_cast<std::array<std::uint8_t, sizeof(data)>>(data));
 }
 
+GuestGeCallbackData read_ge_callback_data(const Memory &memory, GuestAddress address)
+{
+    GuestGeCallbackData data;
+    memory.read_into(address, std::as_writable_bytes(std::span{&data, 1}));
+    return data;
+}
+
 } // namespace psp::detail

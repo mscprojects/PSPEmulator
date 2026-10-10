@@ -77,6 +77,15 @@ struct GuestControllerData
     std::array<std::uint8_t, 4> reserved{};
 };
 
+// PspGeCallbackData from PSPSDK's ge/pspge.h: signal and finish handlers with their arguments.
+struct GuestGeCallbackData
+{
+    GuestWord signal_function;
+    GuestWord signal_argument;
+    GuestWord finish_function;
+    GuestWord finish_argument;
+};
+
 static_assert(sizeof(GuestWord) == 4);
 static_assert(sizeof(GuestThreadInfo) == 104);
 static_assert(offsetof(GuestThreadInfo, stack) == 48);
@@ -89,11 +98,15 @@ static_assert(std::is_trivially_copyable_v<GuestMutexWorkArea>);
 static_assert(sizeof(GuestControllerData) == 16);
 static_assert(offsetof(GuestControllerData, left_x) == 8);
 static_assert(std::is_trivially_copyable_v<GuestControllerData>);
+static_assert(sizeof(GuestGeCallbackData) == 16);
+static_assert(offsetof(GuestGeCallbackData, finish_function) == 8);
+static_assert(std::is_trivially_copyable_v<GuestGeCallbackData>);
 
-// Writes validate the entire output range before copying any bytes.
+// Reads and writes validate the entire guest range before copying any bytes.
 void write_thread_info(Memory &memory, GuestAddress address, const GuestThreadInfo &info);
 GuestMutexWorkArea read_mutex_work_area(const Memory &memory, GuestAddress address);
 void write_mutex_work_area(Memory &memory, GuestAddress address, const GuestMutexWorkArea &work_area);
 void write_controller_data(Memory &memory, GuestAddress address, const GuestControllerData &data);
+GuestGeCallbackData read_ge_callback_data(const Memory &memory, GuestAddress address);
 
 } // namespace psp::detail

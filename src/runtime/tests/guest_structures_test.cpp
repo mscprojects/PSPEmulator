@@ -58,4 +58,17 @@ TEST(GuestStructuresTest, MutexWorkAreaReadsGuestChangesAndPreservesReservedByte
     EXPECT_EQ(memory.read_u32(GuestAddress{28}), 0x12345678U);
 }
 
+TEST(GuestStructuresTest, GeCallbackDataUsesPspFieldOffsetsAndRejectsIncompleteRecords)
+{
+    Memory memory(GuestAddress{0}, 16);
+    memory.write_bytes(GuestAddress{0}, Payload{0x00, 0x04, 0x80, 0x08, 0x11, 0x00, 0x00, 0x00, 0x00, 0x05, 0x80, 0x08,
+                                                0x22, 0x00, 0x00, 0x00});
+    const auto data = read_ge_callback_data(memory, GuestAddress{0});
+    EXPECT_EQ(data.signal_function.value(), 0x08800400U);
+    EXPECT_EQ(data.signal_argument.value(), 0x11U);
+    EXPECT_EQ(data.finish_function.value(), 0x08800500U);
+    EXPECT_EQ(data.finish_argument.value(), 0x22U);
+    EXPECT_THROW(read_ge_callback_data(memory, GuestAddress{4}), std::out_of_range);
+}
+
 } // namespace psp::detail

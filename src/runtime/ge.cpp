@@ -1,5 +1,7 @@
 #include "runtime/ge.hpp"
 
+#include "runtime/guest_structures.hpp"
+
 #include <fmt/format.h>
 
 #include <algorithm>
@@ -83,11 +85,11 @@ Ge::Ge(Memory &memory, Kernel &kernel, std::uint64_t command_budget)
 std::uint32_t Ge::set_callback(GuestAddress address)
 {
     validate_pointer(memory_, address);
-    memory_.validate_range(address, 16);
+    const auto data = read_ge_callback_data(memory_, address);
     // Signal commands are outside this milestone. Validate their registration
     // too, and reject SIGNAL if a guest actually submits one.
-    const auto signal = GuestAddress{memory_.read_u32(address)};
-    const auto finish = GuestAddress{memory_.read_u32(GuestAddress{address.value_of() + 8})};
+    const auto signal = GuestAddress{data.signal_function.value()};
+    const auto finish = GuestAddress{data.finish_function.value()};
     for (const auto entry : {signal, finish})
     {
         if (entry.value_of() != 0)
@@ -99,7 +101,7 @@ std::uint32_t Ge::set_callback(GuestAddress address)
     {
         if (!callbacks_[id])
         {
-            callbacks_[id] = Callback{finish, GuestAddress{memory_.read_u32(GuestAddress{address.value_of() + 12})}};
+            callbacks_[id] = Callback{finish, GuestAddress{data.finish_argument.value()}};
             return static_cast<std::uint32_t>(id);
         }
     }
