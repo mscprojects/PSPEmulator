@@ -25,8 +25,8 @@ enum class AllocationDirection : std::uint8_t
 class AddressArena
 {
 public:
-    // Manage [begin, end) after rounding begin up and end down to the alignment.
-    // An empty or inverted range yields an arena without free space.
+    // Manage [begin, end) after rounding begin up and end down to the alignment, which can
+    // leave no free space. Throws std::invalid_argument if begin > end or end > 2^32.
     AddressArena(std::uint64_t begin, std::uint64_t end);
     // Round size up to the alignment. Throws std::runtime_error for a zero size or when
     // no free range fits; a failed allocation leaves the arena unchanged.

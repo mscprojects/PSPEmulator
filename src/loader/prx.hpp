@@ -43,14 +43,15 @@ struct LoadedPrx
 {
     Memory memory;
     GuestAddress entry_point;
+    // End of the highest load segment, including BSS; RAM above it is free for allocation.
+    GuestAddress image_end;
     PrxModule module;
     std::vector<PrxImportLibrary> imports;
 };
 
-// Prepare a parsed PRX in zeroed RAM starting at the canonical load_address.
-// memory_size includes space for the image and any later stack/heap allocations.
-// RAM must fit below 0x40000000 without overlapping VRAM. Adds shared RAM aliases
-// at bits 30/31 and 2 MiB of VRAM at 0x04000000 and 0x44000000.
+// Prepare a parsed PRX in zeroed RAM starting at the canonical load_address, using the
+// layout from create_psp_memory(). memory_size includes space for the image and any
+// later stack/heap allocations.
 // Applies uncompressed PSP relocations and leaves function import stubs untouched.
 // Throws std::invalid_argument for malformed or unsupported input; no partial result escapes.
 LoadedPrx prepare_prx(const ParsedPrx &prx, GuestAddress load_address, std::size_t memory_size);

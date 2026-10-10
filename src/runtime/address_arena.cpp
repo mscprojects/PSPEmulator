@@ -16,6 +16,10 @@ constexpr std::uint64_t kAlignment = 256;
 
 AddressArena::AddressArena(std::uint64_t begin, std::uint64_t end)
 {
+    if (begin > end || end > (std::uint64_t{1} << 32))
+    {
+        throw std::invalid_argument("Arena must be an ordered range within the 32-bit address space");
+    }
     begin = (begin + kAlignment - 1) & ~(kAlignment - 1);
     end &= ~(kAlignment - 1);
     if (begin < end)

@@ -11,7 +11,7 @@ namespace psp::detail
 TEST(ControllerTest, BlockingReadYieldsAndResumesOnlyAtGuestSampleWithExactLayout)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     Controller controller(memory, kernel);
     EXPECT_EQ(controller.set_sampling_cycle(0), 0U);
@@ -41,7 +41,7 @@ TEST(ControllerTest, BlockingReadYieldsAndResumesOnlyAtGuestSampleWithExactLayou
 TEST(ControllerTest, DigitalSamplesAreNeutralAndUnconsumedSamplesUseLatestGuestTimestamp)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     Controller controller(memory, kernel);
     controller.set_input({0x8, 0, 255, 10, 20});
@@ -60,7 +60,7 @@ TEST(ControllerTest, DigitalSamplesAreNeutralAndUnconsumedSamplesUseLatestGuestT
 TEST(ControllerTest, InvalidReadDoesNotConsumeSampleOrBlockCaller)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     Controller controller(memory, kernel);
     controller.vblank();
@@ -78,7 +78,7 @@ TEST(ControllerTest, InvalidReadDoesNotConsumeSampleOrBlockCaller)
 TEST(ControllerTest, MultipleReadersReceiveDistinctSamplesInFifoOrder)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     Controller controller(memory, kernel);
     const auto first = kernel.current_thread_id();

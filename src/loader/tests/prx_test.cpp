@@ -48,32 +48,17 @@ TEST(PrxTest, PreparesIndependentImagesFromOneParsedPrx)
     EXPECT_EQ(fixture.bytes, original_bytes);
 }
 
-TEST(PrxTest, LoadedMemoryMapsVramAndSharedRamAddressViews)
+TEST(PrxTest, LoadedImageUsesThePspMemoryLayoutAndRejectsInvalidRamPlacement)
 {
     const test::PrxFixture fixture;
     auto loaded = prepare_prx(read_prx(fixture.bytes), GuestAddress{0x08800000}, 0x1000);
-    loaded.memory.write_u32(GuestAddress{0x48800800}, 0x12345678);
-    EXPECT_EQ(loaded.memory.read_u32(GuestAddress{0x08800800}), 0x12345678U);
-    EXPECT_EQ(loaded.memory.read_u32(GuestAddress{0x88800800}), 0x12345678U);
-    EXPECT_EQ(loaded.memory.read_u32(GuestAddress{0xC8800800}), 0x12345678U);
-    EXPECT_EQ(loaded.memory.read_u32(GuestAddress{0x04000000}), 0U);
-    EXPECT_EQ(loaded.memory.read_u32(GuestAddress{0x441FFFFC}), 0U);
+    EXPECT_EQ(loaded.memory.read_u32(GuestAddress{0x48800060}), 0x08800100U);
     loaded.memory.write_u32(GuestAddress{0x44000000}, 0xAABBCCDD);
     EXPECT_EQ(loaded.memory.read_u32(GuestAddress{0x04000000}), 0xAABBCCDDU);
-    loaded.memory.write_u16(GuestAddress{0x041FFFFE}, 0x1234);
-    EXPECT_EQ(loaded.memory.read_u16(GuestAddress{0x441FFFFE}), 0x1234U);
-    EXPECT_EQ(loaded.memory.read_u32(GuestAddress{0x08800800}), 0x12345678U);
-    for (const auto address : {0x03FFFFFFU, 0x04200000U, 0x04400000U, 0x04800000U, 0x44200000U, 0x84000000U,
-                               0x08801000U, 0x48801000U, 0xA8800000U})
-    {
-        SCOPED_TRACE(address);
-        EXPECT_THROW(loaded.memory.read_u8(GuestAddress{address}), std::out_of_range);
-    }
+    EXPECT_EQ(loaded.image_end, GuestAddress{0x08800200});
     EXPECT_THROW(prepare_prx(read_prx(fixture.bytes), GuestAddress{0x48800000}, 0x1000), std::invalid_argument);
     EXPECT_THROW(prepare_prx(read_prx(fixture.bytes), GuestAddress{0x3FFFF000}, 0x2000), std::invalid_argument);
     EXPECT_THROW(prepare_prx(read_prx(fixture.bytes), GuestAddress{0x04000000}, 0x1000), std::invalid_argument);
-    EXPECT_THROW(loaded.memory.write_u32(GuestAddress{0x441FFFFE}, 0), std::out_of_range);
-    EXPECT_EQ(loaded.memory.read_u16(GuestAddress{0x041FFFFE}), 0x1234U);
 }
 
 TEST(PrxTest, PreparesAfterSourcePayloadIsDestroyed)

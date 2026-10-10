@@ -9,7 +9,9 @@ namespace psp::detail
 
 Runtime::Runtime(const ParsedPrx &prx, const ExecutionOptions &options)
     : loaded_(prepare_prx(prx, options.load_address, options.memory_size)), cpu_(loaded_.memory),
-      kernel_(loaded_.memory, options.load_address, options.memory_size, prx.segments, loaded_.module.global_pointer),
+      kernel_(loaded_.memory,
+              {loaded_.image_end.value_of(), std::uint64_t{options.load_address.value_of()} + options.memory_size},
+              loaded_.module.global_pointer),
       io_(loaded_.memory), display_(loaded_.memory), controller_(loaded_.memory, kernel_),
       ge_(loaded_.memory, kernel_, options.max_instructions),
       dispatcher_(loaded_.memory, kernel_, io_, display_, controller_, ge_, loaded_.imports),

@@ -7,7 +7,7 @@
 Each component has one header and one implementation file. Related kernel services stay together in `kernel.hpp` and `kernel.cpp`; file size alone is not a reason to split them.
 
 - `AddressArena` owns address-ordered free guest ranges, 256-byte alignment, low/high placement, and merging of freed ranges. It knows nothing about kernel objects.
-- `Memory` owns RAM and VRAM backing bytes and shared address aliases, initialized by `prepare_prx()`. See [guest memory](memory.md) for the execution layout and access rules.
+- `Memory` owns RAM and VRAM backing bytes and shared address aliases, created by `create_psp_memory()` and filled by `prepare_prx()`. See [guest memory](memory.md) for the execution layout and access rules.
 - `Cpu` executes one Allegrex instruction against guest memory and the supplied `CpuState`.
 - `Kernel` owns saved CPU states, thread creation metadata, the ready queue, guest time, delay deadlines, interrupt masking and pending events, callback ownership and notifications, execution termination, mutex identities, semaphore counts, partition block IDs, and the shared object-ID counter. Each thread has an explicit created, started, waiting, or finished lifecycle; started threads are reported as running or ready according to the selected thread ID. Thread stacks and partition blocks share one `AddressArena`; the kernel maps each block ID to its range. Guest mutex work areas remain authoritative for ownership and recursive counts; mutex operations use the kernel's current thread ID.
 - `Controller` owns host input, sampling mode, the latest unread sample, and pending controller read buffers. It writes samples and asks the kernel to wake their readers at guest vblank.
@@ -32,7 +32,7 @@ The runtime passes the event and current CPU state to the dispatcher. Integer ar
 
 ## Partition memory
 
-The allocation arena begins after the loaded image and ends at the configured RAM limit. Its bounds and allocation sizes use 256-byte alignment. A return sentinel and thread stacks reserve space in the same arena as partition blocks. VRAM remains separate.
+The allocation arena begins at the loaded image's end, reported by `prepare_prx()`, and ends at the configured RAM limit. Its bounds and allocation sizes use 256-byte alignment. A return sentinel and thread stacks reserve space in the same arena as partition blocks. VRAM remains separate.
 
 `sceKernelAllocPartitionMemory` (`SysMemUserForUser`, NID `0x237DBD4F`) supports user partition 2 and low/high allocation types 0/1. Low allocations use the lowest suitable free range; high allocations use the highest suitable range. Each block ID records the complete aligned allocation. `sceKernelGetBlockHeadAddr` (`0x9D9A5BA1`) returns its start address.
 

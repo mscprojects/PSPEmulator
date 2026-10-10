@@ -13,7 +13,7 @@ namespace psp::detail
 TEST(KernelTest, ThreadSelectionPreservesSeparateCpuStatesAndReturnStatus)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0x100});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0x100});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto first = kernel.current_thread_id();
     const auto second = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "second", 0});
@@ -49,7 +49,7 @@ TEST(KernelTest, ThreadSelectionPreservesSeparateCpuStatesAndReturnStatus)
 TEST(KernelTest, DelayedThreadResumesAfterAnotherThreadExits)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto first = kernel.current_thread_id();
     const auto second = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "second", 0});
@@ -87,7 +87,7 @@ TEST(KernelTest, DelayedThreadResumesAfterAnotherThreadExits)
 TEST(KernelTest, DelaySyscallDefersItsResultAndPreservesCommittedReturnAddress)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x800}, {});
     GuestIo io(memory);
     const std::array imports{PrxImportLibrary{
@@ -120,7 +120,7 @@ TEST(KernelTest, DelaySyscallDefersItsResultAndPreservesCommittedReturnAddress)
 TEST(KernelTest, EventWaitsEndWithTheirResultAndRejectReasonsWithDedicatedServices)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x800}, {});
     const auto main = kernel.current_thread_id();
     for (const auto reason :
@@ -140,7 +140,7 @@ TEST(KernelTest, EventWaitsEndWithTheirResultAndRejectReasonsWithDedicatedServic
 TEST(KernelTest, IdleClockAdvancesToEarliestDeadlineAndPreservesEqualDeadlineOrder)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto first = kernel.current_thread_id();
     const auto second = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "second", 0});
@@ -174,7 +174,7 @@ TEST(KernelTest, IdleClockAdvancesToEarliestDeadlineAndPreservesEqualDeadlineOrd
 TEST(KernelTest, ElapsedDelayDoesNotPreemptAnEqualPriorityRunningThread)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto first = kernel.current_thread_id();
     const auto second = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x20, "second", 0});
@@ -201,7 +201,7 @@ TEST(KernelTest, ElapsedDelayDoesNotPreemptAnEqualPriorityRunningThread)
 TEST(KernelTest, ZeroDelayYieldsToReadyThreadsAndGameExitStopsPendingDelays)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto first = kernel.current_thread_id();
     kernel.delay_thread(0);
@@ -223,7 +223,7 @@ TEST(KernelTest, ZeroDelayYieldsToReadyThreadsAndGameExitStopsPendingDelays)
 TEST(KernelTest, GuestClockAndDelayDeadlinesRemainWideAndRejectOverflow)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     kernel.advance_time(0xFFFFFFFEULL);
     kernel.delay_thread(5);
@@ -242,7 +242,7 @@ TEST(KernelTest, GuestClockAndDelayDeadlinesRemainWideAndRejectOverflow)
 TEST(KernelTest, VblankInterruptsFollowLcdCadenceWithoutRoundingDrift)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     // 60000/1001 Hz gives edges at 16683 1/3, 33366 2/3, and 50050 us.
     kernel.advance_time(16'683);
@@ -269,7 +269,7 @@ TEST(KernelTest, VblankInterruptsFollowLcdCadenceWithoutRoundingDrift)
 TEST(KernelTest, InterruptMakesStoreConditionalFailAndLoadLinkedCanRearmIt)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     Cpu cpu(memory);
     memory.write_u32(GuestAddress{0x400}, 0xC0850000); // ll $a1, 0($a0)
@@ -303,7 +303,7 @@ TEST(KernelTest, InterruptPreservesBranchAndReturnDelaySlotsAndAllRegisters)
     {
         SCOPED_TRACE(branch);
         Memory memory(GuestAddress{0}, 0x40000);
-        Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+        Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
         kernel.initialize(GuestAddress{0x400}, {});
         Cpu cpu(memory);
         memory.write_u32(GuestAddress{0x400}, branch);
@@ -341,7 +341,7 @@ TEST(KernelTest, InterruptPreservesBranchAndReturnDelaySlotsAndAllRegisters)
 TEST(KernelTest, MaskedInterruptsStayPendingUntilTheOuterSuspendIsResumed)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     auto &state = kernel.current_thread_state();
     state.load_linked = true;
@@ -370,7 +370,7 @@ TEST(KernelTest, MaskedInterruptsStayPendingUntilTheOuterSuspendIsResumed)
 TEST(KernelTest, IdleTimeSchedulesInterruptsWithoutChangingWaitingThreadState)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     auto &state = kernel.current_thread_state();
     state.load_linked = true;
@@ -394,7 +394,7 @@ TEST(KernelTest, IdleTimeSchedulesInterruptsWithoutChangingWaitingThreadState)
 TEST(KernelTest, ObjectIdentifiersAreSharedAcrossThreadsPartitionsAndSynchronization)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto thread = kernel.current_thread_id();
     const auto block = kernel.allocate_partition({2, 0, 256});
@@ -414,7 +414,7 @@ TEST(KernelTest, ObjectIdentifiersAreSharedAcrossThreadsPartitionsAndSynchroniza
 TEST(KernelTest, WrongMutexOwnerCannotChangeGuestWorkArea)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto other = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "other", 0});
     kernel.create_mutex({GuestAddress{0x900}, GuestAddress{0x800}, 0x200, 0, GuestAddress{0}});
@@ -436,7 +436,7 @@ TEST(KernelTest, WrongMutexOwnerCannotChangeGuestWorkArea)
 TEST(KernelTest, HeapAndStacksShareAnArenaAndFailedAllocationsPreserveCapacity)
 {
     Memory memory(GuestAddress{0x1000}, 1280);
-    Kernel kernel(memory, GuestAddress{0x1000}, 1280, {}, GuestAddress{0});
+    Kernel kernel(memory, {0x1000, 0x1500}, GuestAddress{0});
     // The kernel's return sentinel reserves the first 256 bytes.
     const auto low = kernel.allocate_partition({2, 0, 1});
     const auto high = kernel.allocate_partition({2, 1, 1});
@@ -454,7 +454,7 @@ TEST(KernelTest, HeapAndStacksShareAnArenaAndFailedAllocationsPreserveCapacity)
 TEST(KernelTest, InvalidFreesAndAllocationSizesLeaveLiveBlocksIntact)
 {
     Memory memory(GuestAddress{0x1000}, 1280);
-    Kernel kernel(memory, GuestAddress{0x1000}, 1280, {}, GuestAddress{0});
+    Kernel kernel(memory, {0x1000, 0x1500}, GuestAddress{0});
     const auto block = kernel.allocate_partition({2, 0, 257});
     const auto address = kernel.block_address(block);
     memory.write_u32(address, 0x12345678);
@@ -479,7 +479,7 @@ TEST(KernelTest, InvalidFreesAndAllocationSizesLeaveLiveBlocksIntact)
 TEST(KernelTest, ThreadStackUsesAFreedPartitionRangeWithoutOverlappingLiveBlocks)
 {
     Memory memory(GuestAddress{0x1000}, 2304);
-    Kernel kernel(memory, GuestAddress{0x1000}, 2304, {}, GuestAddress{0});
+    Kernel kernel(memory, {0x1000, 0x1900}, GuestAddress{0});
     const auto low = kernel.allocate_partition({2, 0, 512});
     const auto middle = kernel.allocate_partition({2, 0, 1024});
     const auto high = kernel.allocate_partition({2, 0, 512});
@@ -504,19 +504,16 @@ TEST(KernelTest, ThreadStackUsesAFreedPartitionRangeWithoutOverlappingLiveBlocks
 TEST(KernelTest, AllocationPreservesAddressesAtTheEndOfTheGuestAddressSpace)
 {
     Memory memory(GuestAddress{0xFFFFFB00}, 1280);
-    Kernel kernel(memory, GuestAddress{0xFFFFFB00}, 1280, {}, GuestAddress{0});
+    Kernel kernel(memory, {0xFFFFFB00, 0x100000000}, GuestAddress{0});
     const auto high = kernel.allocate_partition({2, 1, 1});
     EXPECT_EQ(kernel.block_address(high), GuestAddress{0xFFFFFF00});
     EXPECT_EQ(kernel.free_memory_size(), 768U);
-    EXPECT_THROW(Kernel(memory, GuestAddress{0xFFFFFB00}, 1281, {}, GuestAddress{0}), std::invalid_argument);
-    EXPECT_THROW(Kernel(memory, GuestAddress{0xFFFFFB00}, std::numeric_limits<std::size_t>::max(), {}, GuestAddress{0}),
-                 std::invalid_argument);
 }
 
 TEST(KernelTest, IdleSelectionStopsAtVblankBeforeWakeupAndDefersInterruptDelivery)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     auto &state = kernel.current_thread_state();
     state.load_linked = true;
@@ -544,7 +541,7 @@ TEST(KernelTest, IdleSelectionStopsAtVblankBeforeWakeupAndDefersInterruptDeliver
 TEST(KernelTest, HigherPriorityReadyThreadsPreemptAtBoundariesAndResumeSavedThreads)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto main = kernel.current_thread_id();
     const auto low = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "low", 0});
@@ -588,7 +585,7 @@ TEST(KernelTest, HigherPriorityReadyThreadsPreemptAtBoundariesAndResumeSavedThre
 TEST(KernelTest, ExitCallbackRunsOnOwnerAndRestoresCpuStateWithoutEndingSleep)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0x100});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0x100});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto main = kernel.current_thread_id();
     const auto owner = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x11, "callbacks", 0});
@@ -661,7 +658,7 @@ TEST(KernelTest, ExitCallbackRunsOnOwnerAndRestoresCpuStateWithoutEndingSleep)
 TEST(KernelTest, EarlyExitRequestWaitsForCallbackEnabledSleepAndNonzeroReturnDeletesCallback)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     kernel.request_exit();
     const auto id = kernel.create_callback(GuestAddress{0x800}, GuestAddress{0});
@@ -688,7 +685,7 @@ TEST(KernelTest, EarlyExitRequestWaitsForCallbackEnabledSleepAndNonzeroReturnDel
 TEST(KernelTest, CallbackValidationRejectsInvalidEntriesIdsAndInsufficientStack)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     EXPECT_THROW(kernel.create_callback(GuestAddress{0}, GuestAddress{0}), std::runtime_error);
     EXPECT_THROW(kernel.create_callback(GuestAddress{0x801}, GuestAddress{0}), std::runtime_error);
@@ -714,7 +711,7 @@ TEST(KernelTest, GeInterruptPreservesIdleWaitAndCompletionsDuringItsExecution)
             SCOPED_TRACE(kind);
             SCOPED_TRACE(complete_during);
             Memory memory(GuestAddress{0}, 0x40000);
-            Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+            Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
             kernel.initialize(GuestAddress{0x400}, {});
             const auto id = kernel.current_thread_id();
             auto saved = kernel.current_thread_state();
@@ -773,7 +770,7 @@ TEST(KernelTest, GeInterruptPreservesIdleWaitAndCompletionsDuringItsExecution)
 TEST(KernelTest, GeInterruptDefersHigherPriorityThreadsUntilItsReturn)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto main = kernel.current_thread_id();
     ASSERT_TRUE(kernel.enter_interrupt_callback(GuestAddress{0x800}, 7, GuestAddress{0}));
@@ -796,7 +793,7 @@ TEST(KernelTest, GeInterruptDefersHigherPriorityThreadsUntilItsReturn)
 TEST(KernelTest, GeInterruptUsesAWaitingThreadAfterTheLastRunningThreadExits)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto main = kernel.current_thread_id();
     const auto worker = kernel.create_thread({GuestAddress{0x900}, 0x1000, 0x30, "worker", 0});
@@ -820,7 +817,7 @@ TEST(KernelTest, GeInterruptUsesAWaitingThreadAfterTheLastRunningThreadExits)
 TEST(KernelTest, GeInterruptDefersWhileAnExitCallbackWaitsAndAllowsTimeToAdvance)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto callback = kernel.create_callback(GuestAddress{0x800}, GuestAddress{0});
     kernel.register_exit_callback(callback);
@@ -843,7 +840,7 @@ TEST(KernelTest, GeInterruptDefersWhileAnExitCallbackWaitsAndAllowsTimeToAdvance
 TEST(KernelTest, VblankWaitTargetsTheNextEdgeAndEventFlagIdsAreValidated)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, GuestAddress{0}, 0x40000, {}, GuestAddress{0});
+    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     for (const auto edge : {16'684U, 33'367U, 50'050U})
     {

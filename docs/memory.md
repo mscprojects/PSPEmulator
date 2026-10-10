@@ -4,7 +4,7 @@
 
 ## PRX execution layout
 
-`prepare_prx()` maps the configured RAM region and these views:
+`create_psp_memory()` maps the configured RAM region and these views; `prepare_prx()` places the PRX image in that layout:
 
 - RAM at the configured canonical load address, normally `0x08800000`, with the configured size, normally 24 MiB.
 - The same RAM with address bit 30 set: normally `0x48800000`, the uncached user view.
@@ -13,7 +13,7 @@
 - Independent 2 MiB VRAM storage at `0x04000000` through `0x041FFFFF`.
 - The same VRAM at `0x44000000` through `0x441FFFFF`, its uncached view.
 
-RAM size continues to describe RAM alone. VRAM is outside the kernel's stack and partition allocation arena. The configured canonical RAM region must fit below `0x40000000` and must not overlap VRAM or its views. Relocation and module validation still require PRX records to belong to loaded segments; mapping VRAM does not make it a valid location for arbitrary module metadata.
+RAM size continues to describe RAM alone. `prepare_prx()` reports the end of the loaded image; the kernel's stack and partition allocation arena spans from there to the end of RAM, and VRAM is outside it. The configured canonical RAM region must fit below `0x40000000` and must not overlap VRAM or its views. Relocation and module validation still require PRX records to belong to loaded segments; mapping VRAM does not make it a valid location for arbitrary module metadata.
 
 The [PSPSDK GE header](https://github.com/pspdev/pspsdk/blob/master/src/ge/pspge.h) describes the baseline 2 MiB EDRAM size. The bundled [`setframebuf` test](../third_party/pspautotests/tests/display/setframebuf.cpp) uses both primary and uncached VRAM pointers. Address-view layout was checked against [PPSSPP's explicit memory mappings](https://github.com/hrydgard/ppsspp/blob/master/Core/MemMap.cpp). These sources serve different purposes: SDK declarations describe public interfaces, hardware tests probe behavior, and emulator mappings provide an implementation reference.
 
@@ -25,4 +25,4 @@ Cached and uncached views are coherent because they share bytes; cache lines, ca
 
 ## Verification
 
-[Memory tests](../src/memory/tests/memory_test.cpp) cover shared scalar/range/string access, independent regions, alias chains, overlap and wrap rejection, boundaries, copy ownership, and preservation after faults. [Loader tests](../src/loader/tests/prx_test.cpp) verify the actual RAM and VRAM layout, first and last VRAM bytes, and unmapped addresses. [Execution tests](../src/runtime/tests/execution_test.cpp) run guest instructions that store through primary VRAM and load through its uncached view, alongside the existing unmodified CPU PRX output comparisons.
+[Memory tests](../src/memory/tests/memory_test.cpp) cover shared scalar/range/string access, independent regions, alias chains, overlap and wrap rejection, boundaries, copy ownership, and preservation after faults. They also verify the PSP RAM and VRAM layout, first and last VRAM bytes, unmapped addresses, and rejected RAM placements. [Loader tests](../src/loader/tests/prx_test.cpp) check that a loaded image appears in that layout and report its end address. [Execution tests](../src/runtime/tests/execution_test.cpp) run guest instructions that store through primary VRAM and load through its uncached view, alongside the existing unmodified CPU PRX output comparisons.

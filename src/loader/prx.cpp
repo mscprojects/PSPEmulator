@@ -333,25 +333,17 @@ LoadedPrx prepare_prx(const ParsedPrx &prx, GuestAddress load_address, std::size
         throw std::invalid_argument("PRX must begin with a load segment containing module information");
     }
     require_word_aligned(load_address);
-    if (memory_size == 0 ||
-        static_cast<std::uint64_t>(memory_size) > (std::uint64_t{1} << 32) - load_address.value_of())
-    {
-        throw std::invalid_argument("PRX memory must fit in the 32-bit address space");
-    }
-    // The canonical RAM range must fit below the two PSP alias bits.
-    if (load_address.value_of() >= 0x40000000U || memory_size > 0x40000000ULL - load_address.value_of())
-    {
-        throw std::invalid_argument("PRX RAM must fit below the PSP address alias bits");
-    }
-    Memory memory(load_address, memory_size);
-    // PSP address views share backing bytes; cache behavior and privilege checks
-    // are not modeled. VRAM's specialized extra mirrors remain unsupported.
-    memory.map_alias(GuestAddress{load_address.value_of() | 0x40000000U}, load_address);
-    memory.map_alias(GuestAddress{load_address.value_of() | 0x80000000U}, load_address);
-    memory.map_alias(GuestAddress{load_address.value_of() | 0xC0000000U}, load_address);
-    memory.map_region(GuestAddress{0x04000000}, 0x00200000);
-    memory.map_alias(GuestAddress{0x44000000}, GuestAddress{0x04000000});
+    auto memory = create_psp_memory(load_address, memory_size);
     const auto segments = load_segments(memory, prx.segments, load_address, memory_size);
+    // load_segments() checked that every load segment fits in RAM, so its end cannot wrap.
+    auto image_end = load_address.value_of();
+    for (const auto &segment : segments)
+    {
+        if (segment.header.type == kLoadSegment)
+        {
+            image_end = std::max(image_end, segment.address.value_of() + segment.header.memory_size);
+        }
+    }
     const auto entry = checked_address(static_cast<std::uint64_t>(load_address.value_of()) + prx.entry_offset);
     require_word_aligned(entry);
     if (!std::ranges::any_of(
@@ -380,7 +372,7 @@ LoadedPrx prepare_prx(const ParsedPrx &prx, GuestAddress load_address, std::size
         require_mapped(segments, module.exports_begin, module.exports_end.value_of() - module.exports_begin.value_of());
     }
     auto imports = read_imports(memory, segments, prx.module_offset);
-    return {std::move(memory), entry, std::move(module), std::move(imports)};
+    return {std::move(memory), entry, GuestAddress{image_end}, std::move(module), std::move(imports)};
 }
 
 } // namespace psp

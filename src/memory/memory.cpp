@@ -193,4 +193,21 @@ void Memory::write_le(GuestAddress address, std::uint32_t value, std::size_t wid
     }
 }
 
+Memory create_psp_memory(GuestAddress ram_base, std::size_t ram_size)
+{
+    if (ram_size == 0 || ram_base.value_of() >= 0x40000000U || ram_size > 0x40000000ULL - ram_base.value_of())
+    {
+        throw std::invalid_argument("PSP RAM must be nonempty and fit below the address view bits");
+    }
+    Memory memory(ram_base, ram_size);
+    // PSP address views share backing bytes; cache behavior and privilege checks
+    // are not modeled. VRAM's specialized extra mirrors remain unsupported.
+    memory.map_alias(GuestAddress{ram_base.value_of() | 0x40000000U}, ram_base);
+    memory.map_alias(GuestAddress{ram_base.value_of() | 0x80000000U}, ram_base);
+    memory.map_alias(GuestAddress{ram_base.value_of() | 0xC0000000U}, ram_base);
+    memory.map_region(GuestAddress{0x04000000}, 0x00200000);
+    memory.map_alias(GuestAddress{0x44000000}, GuestAddress{0x04000000});
+    return memory;
+}
+
 } // namespace psp

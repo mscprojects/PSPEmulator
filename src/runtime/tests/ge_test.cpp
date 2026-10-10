@@ -18,11 +18,9 @@ class GeTest : public testing::Test
 {
 protected:
     GeTest()
-        : memory(GuestAddress{0x08000000}, 0x40000),
-          kernel(memory, GuestAddress{0x08000000}, 0x40000, {}, GuestAddress{0x08000100}), ge(memory, kernel, 1000)
+        : memory(create_psp_memory(GuestAddress{0x08000000}, 0x40000)),
+          kernel(memory, {0x08000000, 0x08040000}, GuestAddress{0x08000100}), ge(memory, kernel, 1000)
     {
-        memory.map_region(GuestAddress{0x04000000}, 0x200000);
-        memory.map_alias(GuestAddress{0x44000000}, GuestAddress{0x04000000});
         kernel.initialize(GuestAddress{0x08000400}, {});
     }
 

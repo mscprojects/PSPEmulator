@@ -28,30 +28,10 @@ std::optional<std::uint64_t> vblank_after(std::uint64_t time)
     return start + offset;
 }
 
-// The arena spans from the end of the loaded image to the end of RAM.
-AddressArena allocation_arena(GuestAddress load_address, std::size_t memory_size, std::span<const PrxSegment> segments)
-{
-    if (memory_size == 0 || memory_size > (std::uint64_t{1} << 32) - load_address.value_of())
-    {
-        throw std::invalid_argument("Kernel memory must fit in the 32-bit address space");
-    }
-    std::uint64_t begin = load_address.value_of();
-    for (const auto &segment : segments)
-    {
-        if (segment.type == 1)
-        {
-            begin = std::max(begin, static_cast<std::uint64_t>(load_address.value_of()) + segment.virtual_address +
-                                        segment.memory_size);
-        }
-    }
-    return {begin, load_address.value_of() + memory_size};
-}
-
 } // namespace
 
-Kernel::Kernel(Memory &memory, GuestAddress load_address, std::size_t memory_size, std::span<const PrxSegment> segments,
-               GuestAddress global_pointer)
-    : memory_(memory), arena_(allocation_arena(load_address, memory_size, segments)), global_pointer_(global_pointer),
+Kernel::Kernel(Memory &memory, AddressRange allocatable, GuestAddress global_pointer)
+    : memory_(memory), arena_(allocatable.begin, allocatable.end), global_pointer_(global_pointer),
       return_address_(GuestAddress{static_cast<std::uint32_t>(arena_.allocate(256, AllocationDirection::Low).begin)}),
       next_vblank_(vblank_after(0))
 {

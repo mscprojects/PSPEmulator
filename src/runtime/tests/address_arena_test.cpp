@@ -10,7 +10,7 @@
 namespace psp::detail
 {
 
-TEST(AddressArenaTest, BoundsAreAlignedInwardAndEmptyArenasRejectAllocations)
+TEST(AddressArenaTest, BoundsAreAlignedInwardAndInvalidRangesAreRejected)
 {
     AddressArena arena(0x1001, 0x14FF);
     EXPECT_EQ(arena.free_size(), 0x300U);
@@ -20,6 +20,9 @@ TEST(AddressArenaTest, BoundsAreAlignedInwardAndEmptyArenasRejectAllocations)
     AddressArena empty(0x1001, 0x10FF);
     EXPECT_EQ(empty.free_size(), 0U);
     EXPECT_THROW(empty.allocate(1, AllocationDirection::Low), std::runtime_error);
+
+    EXPECT_THROW(AddressArena(0x1200, 0x1100), std::invalid_argument);
+    EXPECT_THROW(AddressArena(0xFFFFFC00, (std::uint64_t{1} << 32) + 1), std::invalid_argument);
 }
 
 TEST(AddressArenaTest, HolesAreReusedFromLowestAndHighestAddresses)

@@ -1,7 +1,8 @@
 #pragma once
 
+#include "common/payload.hpp"
 #include "cpu/cpu_state.hpp"
-#include "loader/prx_reader.hpp"
+#include "memory/memory.hpp"
 #include "runtime/address_arena.hpp"
 #include "runtime/guest_structures.hpp"
 
@@ -127,8 +128,8 @@ private:
     };
 
 public:
-    Kernel(Memory &memory, GuestAddress load_address, std::size_t memory_size, std::span<const PrxSegment> segments,
-           GuestAddress global_pointer);
+    // Thread stacks, partition blocks, and the return sentinel come from allocatable RAM.
+    Kernel(Memory &memory, AddressRange allocatable, GuestAddress global_pointer);
     Kernel(const Kernel &) = delete;
     Kernel &operator=(const Kernel &) = delete;
     void initialize(GuestAddress entry, std::span<const std::string> arguments);

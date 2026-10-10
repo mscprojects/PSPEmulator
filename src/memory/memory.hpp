@@ -67,4 +67,10 @@ private:
     std::map<std::uint32_t, std::size_t> mappings_;
 };
 
+// Create the PSP execution layout: zeroed RAM at ram_base with shared views at address
+// bits 30 and 31, plus 2 MiB of VRAM at 0x04000000 with its 0x44000000 view.
+// RAM must be nonempty, fit below 0x40000000, and not overlap VRAM; otherwise this
+// throws std::invalid_argument.
+Memory create_psp_memory(GuestAddress ram_base, std::size_t ram_size);
+
 } // namespace psp
