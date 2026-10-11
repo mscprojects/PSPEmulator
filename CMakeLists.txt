@@ -55,6 +55,8 @@ add_library(psp_core
     src/runtime/guest_io.cpp
     src/runtime/guest_structures.cpp
     src/runtime/kernel.cpp
+    src/runtime/partition_memory.cpp
+    src/runtime/synchronization.cpp
     src/runtime/rasterizer.cpp
     src/runtime/runtime.cpp
     src/runtime/syscall_dispatcher.cpp
@@ -90,6 +92,8 @@ if(BUILD_TESTING)
         src/runtime/tests/execution_test.cpp
         src/runtime/tests/guest_structures_test.cpp
         src/runtime/tests/kernel_test.cpp
+        src/runtime/tests/partition_memory_test.cpp
+        src/runtime/tests/synchronization_test.cpp
         src/runtime/tests/rasterizer_test.cpp
     )
     target_link_libraries(psp_tests PRIVATE psp_core GTest::gtest_main)

@@ -17,13 +17,6 @@
 namespace psp::detail
 {
 
-struct PartitionAllocation
-{
-    std::uint32_t partition;
-    std::uint32_t type;
-    std::uint32_t size;
-};
-
 struct ThreadCreation
 {
     GuestAddress entry;
@@ -33,32 +26,6 @@ struct ThreadCreation
     std::uint32_t attributes;
 };
 
-struct MutexCreation
-{
-    GuestAddress work_area;
-    GuestAddress name;
-    std::uint32_t attributes;
-    std::uint32_t initial_count;
-    GuestAddress options;
-};
-
-struct SemaphoreCreation
-{
-    GuestAddress name;
-    std::uint32_t attributes;
-    std::uint32_t initial_count;
-    std::uint32_t maximum;
-    GuestAddress options;
-};
-
-struct EventFlagCreation
-{
-    GuestAddress name;
-    std::uint32_t attributes;
-    std::uint32_t bits;
-    GuestAddress options;
-};
-
 enum class ThreadSelection : std::uint8_t
 {
     Ready,
@@ -66,10 +33,10 @@ enum class ThreadSelection : std::uint8_t
     Finished,
 };
 
-// Owns threads, scheduling, synchronization, allocations, and kernel object IDs.
+// Owns threads, scheduling, the guest clock, interrupts, and callbacks.
 // Delays use guest microseconds. Controller waits and callback-enabled sleep
 // are supported. Higher-priority ready threads preempt at instruction boundaries;
-// blocking synchronization and equal-priority time slicing remain unsupported.
+// equal-priority time slicing remains unsupported.
 class Kernel
 {
 public:
@@ -122,15 +89,10 @@ private:
         std::uint32_t notifications{};
     };
 
-    struct Semaphore
-    {
-        std::uint32_t count;
-        std::uint32_t maximum;
-    };
-
 public:
-    // Thread stacks, partition blocks, and the return sentinel come from allocatable RAM.
-    Kernel(Memory &memory, AddressRange allocatable, GuestAddress global_pointer);
+    // The arena and next_id are shared with the other runtime services.
+    // Thread stacks and the return sentinel reserve ranges for the execution lifetime.
+    Kernel(Memory &memory, AddressArena &arena, std::uint32_t &next_id, GuestAddress global_pointer);
     Kernel(const Kernel &) = delete;
     Kernel &operator=(const Kernel &) = delete;
     void initialize(GuestAddress entry, std::span<const std::string> arguments);
@@ -190,23 +152,6 @@ public:
     int exit_code() const;
     GuestThreadInfo thread_status(std::uint32_t id) const;
 
-    void create_mutex(const MutexCreation &creation);
-    void delete_mutex(GuestAddress address);
-    void lock_mutex(GuestAddress address, std::uint32_t count, GuestAddress timeout);
-    void unlock_mutex(GuestAddress address, std::uint32_t count);
-    std::uint32_t create_semaphore(const SemaphoreCreation &creation);
-    void delete_semaphore(std::uint32_t id);
-    void wait_semaphore(std::uint32_t id, std::uint32_t count, GuestAddress timeout);
-    void signal_semaphore(std::uint32_t id, std::uint32_t count);
-    std::uint32_t create_event_flag(const EventFlagCreation &creation);
-    void delete_event_flag(std::uint32_t id);
-
-    std::uint32_t allocate_partition(PartitionAllocation allocation);
-    void free_partition(std::uint32_t id);
-    std::uint32_t free_memory_size() const;
-    std::uint32_t largest_free_memory_size() const;
-    GuestAddress block_address(std::uint32_t id) const;
-
 private:
     void place_arguments(Thread &thread, PayloadSpan arguments);
     // Handle the current thread's return to a sentinel after its delay slot: restore the
@@ -219,14 +164,11 @@ private:
     void block_current_thread(Wait reason);
     void begin_callback(Thread &thread, GuestAddress entry, std::array<std::uint32_t, 3> arguments,
                         std::optional<std::uint32_t> id);
-    GuestMutexWorkArea mutex_work_area(GuestAddress address) const;
-    void validate_mutex_count(const GuestMutexWorkArea &work_area, std::uint32_t count) const;
 
     Memory &memory_;
     // Thread stacks and partition blocks share one arena; only partition blocks can be freed.
-    AddressArena arena_;
-    std::map<std::uint32_t, AddressRange> blocks_;
-    std::uint32_t next_id_{1};
+    AddressArena &arena_;
+    std::uint32_t &next_id_;
     GuestAddress global_pointer_;
     GuestAddress return_address_;
     std::map<std::uint32_t, Thread> threads_;
@@ -242,9 +184,6 @@ private:
     bool interrupts_enabled_{true};
     bool interrupt_pending_{};
     std::optional<int> exit_code_;
-    std::map<std::uint32_t, GuestAddress> mutexes_;
-    std::map<std::uint32_t, Semaphore> semaphores_;
-    std::map<std::uint32_t, std::uint32_t> event_flags_;
 };
 
 } // namespace psp::detail

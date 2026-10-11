@@ -7,6 +7,8 @@
 #include "runtime/ge.hpp"
 #include "runtime/guest_io.hpp"
 #include "runtime/kernel.hpp"
+#include "runtime/partition_memory.hpp"
+#include "runtime/synchronization.hpp"
 
 #include <optional>
 #include <span>
@@ -45,7 +47,8 @@ class SyscallDispatcher
     };
 
 public:
-    SyscallDispatcher(Memory &memory, Kernel &kernel, GuestIo &io, Display &display, Controller &controller, Ge &ge,
+    SyscallDispatcher(Memory &memory, Kernel &kernel, PartitionMemory &partitions, Synchronization &synchronization,
+                      GuestIo &io, Display &display, Controller &controller, Ge &ge,
                       std::span<const PrxImportLibrary> imports);
     // A blocking service leaves v0 untouched until its wait completes.
     void handle(const Syscall &syscall, CpuState &state);
@@ -56,6 +59,8 @@ private:
 
     Memory &memory_;
     Kernel &kernel_;
+    PartitionMemory &partitions_;
+    Synchronization &synchronization_;
     GuestIo &io_;
     Display &display_;
     Controller &controller_;

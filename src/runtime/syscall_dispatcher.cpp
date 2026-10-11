@@ -11,9 +11,11 @@
 namespace psp::detail
 {
 
-SyscallDispatcher::SyscallDispatcher(Memory &memory, Kernel &kernel, GuestIo &io, Display &display,
+SyscallDispatcher::SyscallDispatcher(Memory &memory, Kernel &kernel, PartitionMemory &partitions,
+                                     Synchronization &synchronization, GuestIo &io, Display &display,
                                      Controller &controller, Ge &ge, std::span<const PrxImportLibrary> imports)
-    : memory_(memory), kernel_(kernel), io_(io), display_(display), controller_(controller), ge_(ge)
+    : memory_(memory), kernel_(kernel), partitions_(partitions), synchronization_(synchronization), io_(io),
+      display_(display), controller_(controller), ge_(ge)
 {
     std::uint32_t code = 1;
     for (const auto &library : imports)
@@ -96,9 +98,9 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
         switch (binding.nid)
         {
         case 0x55C20A00: // sceKernelCreateEventFlag
-            return kernel_.create_event_flag({GuestAddress{arg(0)}, arg(1), arg(2), GuestAddress{arg(3)}});
+            return synchronization_.create_event_flag({GuestAddress{arg(0)}, arg(1), arg(2), GuestAddress{arg(3)}});
         case 0xEF9E4C70: // sceKernelDeleteEventFlag
-            kernel_.delete_event_flag(arg(0));
+            synchronization_.delete_event_flag(arg(0));
             return 0;
         case 0xE81CAF8F: // sceKernelCreateCallback
             memory_.read_c_string(GuestAddress{arg(0)}, 32);
@@ -142,29 +144,30 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
             kernel_.delay_thread(arg(0));
             return std::nullopt;
         case 0x19CFF145: // sceKernelCreateLwMutex
-            kernel_.create_mutex({.work_area = GuestAddress{arg(0)},
-                                  .name = GuestAddress{arg(1)},
-                                  .attributes = arg(2),
-                                  .initial_count = arg(3),
-                                  .options = GuestAddress{arg(4)}});
+            synchronization_.create_mutex({.work_area = GuestAddress{arg(0)},
+                                           .name = GuestAddress{arg(1)},
+                                           .attributes = arg(2),
+                                           .initial_count = arg(3),
+                                           .options = GuestAddress{arg(4)}},
+                                          kernel_.current_thread_id());
             return 0;
         case 0x60107536: // sceKernelDeleteLwMutex
-            kernel_.delete_mutex(GuestAddress{arg(0)});
+            synchronization_.delete_mutex(GuestAddress{arg(0)});
             return 0;
         case 0xD6DA4BA1: // sceKernelCreateSema
-            return kernel_.create_semaphore({.name = GuestAddress{arg(0)},
-                                             .attributes = arg(1),
-                                             .initial_count = arg(2),
-                                             .maximum = arg(3),
-                                             .options = GuestAddress{arg(4)}});
+            return synchronization_.create_semaphore({.name = GuestAddress{arg(0)},
+                                                      .attributes = arg(1),
+                                                      .initial_count = arg(2),
+                                                      .maximum = arg(3),
+                                                      .options = GuestAddress{arg(4)}});
         case 0x28B6489C: // sceKernelDeleteSema
-            kernel_.delete_semaphore(arg(0));
+            synchronization_.delete_semaphore(arg(0));
             return 0;
         case 0x4E3A1105: // sceKernelWaitSema
-            kernel_.wait_semaphore(arg(0), arg(1), GuestAddress{arg(2)});
+            synchronization_.wait_semaphore(arg(0), arg(1), GuestAddress{arg(2)});
             return 0;
         case 0x3F53E640: // sceKernelSignalSema
-            kernel_.signal_semaphore(arg(0), arg(1));
+            synchronization_.signal_semaphore(arg(0), arg(1));
             return 0;
         default:
             break;
@@ -185,10 +188,11 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
         case 0xB55249D2: // sceKernelIsCpuIntrEnable
             return static_cast<std::uint32_t>(kernel_.interrupts_enabled());
         case 0xBEA46419: // sceKernelLockLwMutex
-            kernel_.lock_mutex(GuestAddress{arg(0)}, arg(1), GuestAddress{arg(2)});
+            synchronization_.lock_mutex(GuestAddress{arg(0)}, arg(1), GuestAddress{arg(2)},
+                                        kernel_.current_thread_id());
             return 0;
         case 0x15B6446B: // sceKernelUnlockLwMutex
-            kernel_.unlock_mutex(GuestAddress{arg(0)}, arg(1));
+            synchronization_.unlock_mutex(GuestAddress{arg(0)}, arg(1), kernel_.current_thread_id());
             return 0;
         default:
             break;
@@ -199,16 +203,16 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
         switch (binding.nid)
         {
         case 0xA291F107: // sceKernelMaxFreeMemSize
-            return kernel_.largest_free_memory_size();
+            return partitions_.largest_free_size();
         case 0xF919F628: // sceKernelTotalFreeMemSize
-            return kernel_.free_memory_size();
+            return partitions_.free_size();
         case 0x237DBD4F: // sceKernelAllocPartitionMemory
-            return kernel_.allocate_partition({.partition = arg(0), .type = arg(2), .size = arg(3)});
+            return partitions_.allocate({.partition = arg(0), .type = arg(2), .size = arg(3)});
         case 0xB6D61D02: // sceKernelFreePartitionMemory
-            kernel_.free_partition(arg(0));
+            partitions_.free(arg(0));
             return 0;
         case 0x9D9A5BA1: // sceKernelGetBlockHeadAddr
-            return kernel_.block_address(arg(0)).value_of();
+            return partitions_.address(arg(0)).value_of();
         default:
             break;
         }

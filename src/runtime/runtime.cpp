@@ -10,12 +10,13 @@ namespace psp::detail
 
 Runtime::Runtime(const ParsedPrx &prx, const ExecutionOptions &options)
     : loaded_(prepare_prx(prx, options.load_address, options.memory_size)), cpu_(loaded_.memory),
-      kernel_(loaded_.memory,
-              {loaded_.image_end.value_of(), std::uint64_t{options.load_address.value_of()} + options.memory_size},
-              loaded_.module.global_pointer),
-      io_(loaded_.memory), display_(loaded_.memory), controller_(loaded_.memory, kernel_),
+      arena_(loaded_.image_end.value_of(), std::uint64_t{options.load_address.value_of()} + options.memory_size),
+      kernel_(loaded_.memory, arena_, next_kernel_id_, loaded_.module.global_pointer),
+      partitions_(arena_, next_kernel_id_), synchronization_(loaded_.memory, next_kernel_id_), io_(loaded_.memory),
+      display_(loaded_.memory), controller_(loaded_.memory, kernel_),
       ge_(loaded_.memory, kernel_, options.max_instructions),
-      dispatcher_(loaded_.memory, kernel_, io_, display_, controller_, ge_, loaded_.imports),
+      dispatcher_(loaded_.memory, kernel_, partitions_, synchronization_, io_, display_, controller_, ge_,
+                  loaded_.imports),
       instruction_budget_(options.max_instructions)
 {
     if (instruction_budget_ == 0)

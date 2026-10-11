@@ -6,6 +6,7 @@
 #include <array>
 #include <limits>
 #include <optional>
+#include <set>
 #include <stdexcept>
 
 namespace psp::detail
@@ -14,7 +15,9 @@ namespace psp::detail
 TEST(KernelTest, ThreadSelectionPreservesSeparateCpuStatesAndReturnStatus)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0x100});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0x100});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto first = kernel.current_thread_id();
     const auto second = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "second", 0});
@@ -50,7 +53,9 @@ TEST(KernelTest, ThreadSelectionPreservesSeparateCpuStatesAndReturnStatus)
 TEST(KernelTest, DelayedThreadResumesAfterAnotherThreadExits)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto first = kernel.current_thread_id();
     const auto second = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "second", 0});
@@ -89,7 +94,9 @@ TEST(KernelTest, DelayedThreadResumesAfterAnotherThreadExits)
 TEST(KernelTest, DelaySyscallDefersItsResultAndPreservesCommittedReturnAddress)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x800}, {});
     GuestIo io(memory);
     const std::array imports{PrxImportLibrary{
@@ -97,7 +104,9 @@ TEST(KernelTest, DelaySyscallDefersItsResultAndPreservesCommittedReturnAddress)
     Display display(memory);
     Controller controller(memory, kernel);
     Ge ge(memory, kernel, 1000);
-    SyscallDispatcher dispatcher(memory, kernel, io, display, controller, ge, imports);
+    PartitionMemory partitions(arena, next_id);
+    Synchronization synchronization(memory, next_id);
+    SyscallDispatcher dispatcher(memory, kernel, partitions, synchronization, io, display, controller, ge, imports);
     Cpu cpu(memory);
     auto &state = kernel.current_thread_state();
     state.registers[31] = 0x900;
@@ -124,7 +133,9 @@ TEST(KernelTest, DelaySyscallDefersItsResultAndPreservesCommittedReturnAddress)
 TEST(KernelTest, EventWaitsEndWithTheirResultAndRejectReasonsWithDedicatedServices)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x800}, {});
     const auto main = kernel.current_thread_id();
     for (const auto reason :
@@ -144,7 +155,9 @@ TEST(KernelTest, EventWaitsEndWithTheirResultAndRejectReasonsWithDedicatedServic
 TEST(KernelTest, WakeupsFollowDeadlinesAndEqualDeadlinesPreserveDelayOrder)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto first = kernel.current_thread_id();
     const auto second = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "second", 0});
@@ -182,7 +195,9 @@ TEST(KernelTest, WakeupsFollowDeadlinesAndEqualDeadlinesPreserveDelayOrder)
 TEST(KernelTest, ElapsedDelayDoesNotPreemptAnEqualPriorityRunningThread)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto first = kernel.current_thread_id();
     const auto second = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x20, "second", 0});
@@ -209,7 +224,9 @@ TEST(KernelTest, ElapsedDelayDoesNotPreemptAnEqualPriorityRunningThread)
 TEST(KernelTest, ZeroDelayYieldsToReadyThreadsAndGameExitStopsPendingDelays)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto first = kernel.current_thread_id();
     kernel.delay_thread(0);
@@ -231,7 +248,9 @@ TEST(KernelTest, ZeroDelayYieldsToReadyThreadsAndGameExitStopsPendingDelays)
 TEST(KernelTest, GuestClockAndDelayDeadlinesRemainWideAndRejectOverflow)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     kernel.advance_time(0xFFFFFFFEULL);
     kernel.delay_thread(5);
@@ -252,7 +271,9 @@ TEST(KernelTest, GuestClockAndDelayDeadlinesRemainWideAndRejectOverflow)
 TEST(KernelTest, VblankInterruptsFollowLcdCadenceWithoutRoundingDrift)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     // 60000/1001 Hz gives edges at 16683 1/3, 33366 2/3, and 50050 us.
     EXPECT_FALSE(kernel.advance_time(16'683));
@@ -279,7 +300,9 @@ TEST(KernelTest, VblankInterruptsFollowLcdCadenceWithoutRoundingDrift)
 TEST(KernelTest, InterruptMakesStoreConditionalFailAndLoadLinkedCanRearmIt)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     Cpu cpu(memory);
     memory.write_u32(GuestAddress{0x400}, 0xC0850000); // ll $a1, 0($a0)
@@ -313,7 +336,9 @@ TEST(KernelTest, InterruptPreservesBranchAndReturnDelaySlotsAndAllRegisters)
     {
         SCOPED_TRACE(branch);
         Memory memory(GuestAddress{0}, 0x40000);
-        Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+        std::uint32_t next_id{1};
+        AddressArena arena(0, 0x40000);
+        Kernel kernel(memory, arena, next_id, GuestAddress{0});
         kernel.initialize(GuestAddress{0x400}, {});
         Cpu cpu(memory);
         memory.write_u32(GuestAddress{0x400}, branch);
@@ -351,7 +376,9 @@ TEST(KernelTest, InterruptPreservesBranchAndReturnDelaySlotsAndAllRegisters)
 TEST(KernelTest, MaskedInterruptsStayPendingUntilTheOuterSuspendIsResumed)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     auto &state = kernel.current_thread_state();
     state.load_linked = true;
@@ -380,7 +407,9 @@ TEST(KernelTest, MaskedInterruptsStayPendingUntilTheOuterSuspendIsResumed)
 TEST(KernelTest, IdleTimeSchedulesInterruptsWithoutChangingWaitingThreadState)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     auto &state = kernel.current_thread_state();
     state.load_linked = true;
@@ -407,126 +436,60 @@ TEST(KernelTest, IdleTimeSchedulesInterruptsWithoutChangingWaitingThreadState)
 TEST(KernelTest, ObjectIdentifiersAreSharedAcrossThreadsPartitionsAndSynchronization)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
+    PartitionMemory partitions(arena, next_id);
+    Synchronization synchronization(memory, next_id);
     kernel.initialize(GuestAddress{0x400}, {});
     const auto thread = kernel.current_thread_id();
-    const auto block = kernel.allocate_partition({2, 0, 256});
-    const auto semaphore = kernel.create_semaphore({GuestAddress{0x800}, 0, 1, 1, GuestAddress{0}});
-    kernel.create_mutex({GuestAddress{0x900}, GuestAddress{0x800}, 0, 0, GuestAddress{0}});
+    const auto block = partitions.allocate({2, 0, 256});
+    const auto semaphore = synchronization.create_semaphore({GuestAddress{0x800}, 0, 1, 1, GuestAddress{0}});
+    synchronization.create_mutex({GuestAddress{0x900}, GuestAddress{0x800}, 0, 0, GuestAddress{0}},
+                                 kernel.current_thread_id());
     const auto mutex = memory.read_u32(GuestAddress{0x910});
-    EXPECT_NE(thread, block);
-    EXPECT_NE(block, semaphore);
-    EXPECT_NE(semaphore, mutex);
-    EXPECT_NE(thread, semaphore);
-    EXPECT_NE(thread, mutex);
-    EXPECT_NE(block, mutex);
-    EXPECT_EQ(kernel.block_address(block), GuestAddress{256});
-    EXPECT_THROW(kernel.block_address(semaphore), std::out_of_range);
-}
-
-TEST(KernelTest, WrongMutexOwnerCannotChangeGuestWorkArea)
-{
-    Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
-    kernel.initialize(GuestAddress{0x400}, {});
-    const auto other = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "other", 0});
-    kernel.create_mutex({GuestAddress{0x900}, GuestAddress{0x800}, 0x200, 0, GuestAddress{0}});
-    kernel.lock_mutex(GuestAddress{0x900}, 1, GuestAddress{0});
-    kernel.unlock_mutex(GuestAddress{0x900}, 1);
-    EXPECT_EQ(memory.read_u32(GuestAddress{0x900}), 0U);
-    EXPECT_EQ(memory.read_u32(GuestAddress{0x904}), 0U);
-
-    kernel.lock_mutex(GuestAddress{0x900}, 1, GuestAddress{0});
-    const auto original = memory.read_bytes(GuestAddress{0x900}, 32);
-    kernel.start_thread(other, GuestAddress{0}, 0);
-    kernel.exit_thread();
-    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
-    ASSERT_EQ(kernel.current_thread_id(), other);
-    EXPECT_THROW(kernel.unlock_mutex(GuestAddress{0x900}, 1), std::runtime_error);
-    EXPECT_EQ(memory.read_bytes(GuestAddress{0x900}, 32), original);
-}
-
-TEST(KernelTest, HeapAndStacksShareAnArenaAndFailedAllocationsPreserveCapacity)
-{
-    Memory memory(GuestAddress{0x1000}, 1280);
-    Kernel kernel(memory, {0x1000, 0x1500}, GuestAddress{0});
-    // The kernel's return sentinel reserves the first 256 bytes.
-    const auto low = kernel.allocate_partition({2, 0, 1});
-    const auto high = kernel.allocate_partition({2, 1, 1});
-    EXPECT_EQ(kernel.block_address(low), GuestAddress{0x1100});
-    EXPECT_EQ(kernel.block_address(high), GuestAddress{0x1400});
-    EXPECT_EQ(kernel.free_memory_size(), 512U);
-    EXPECT_THROW(kernel.allocate_partition({2, 0, 513}), std::runtime_error);
-    EXPECT_EQ(kernel.free_memory_size(), 512U);
-    const auto remaining = kernel.allocate_partition({2, 0, 512});
-    EXPECT_EQ(kernel.block_address(remaining), GuestAddress{0x1200});
-    EXPECT_EQ(kernel.free_memory_size(), 0U);
-    EXPECT_THROW(kernel.allocate_partition({2, 1, 1}), std::runtime_error);
-}
-
-TEST(KernelTest, InvalidFreesAndAllocationSizesLeaveLiveBlocksIntact)
-{
-    Memory memory(GuestAddress{0x1000}, 1280);
-    Kernel kernel(memory, {0x1000, 0x1500}, GuestAddress{0});
-    const auto block = kernel.allocate_partition({2, 0, 257});
-    const auto address = kernel.block_address(block);
-    memory.write_u32(address, 0x12345678);
-    EXPECT_THROW(kernel.free_partition(0), std::out_of_range);
-    EXPECT_THROW(kernel.free_partition(0xDEADBEEF), std::out_of_range);
-    for (const auto size : {0U, 513U, std::numeric_limits<std::uint32_t>::max()})
-    {
-        EXPECT_THROW(kernel.allocate_partition({2, 0, size}), std::runtime_error);
-        EXPECT_THROW(kernel.allocate_partition({2, 1, size}), std::runtime_error);
-    }
-    EXPECT_EQ(kernel.free_memory_size(), 512U);
-    EXPECT_EQ(kernel.largest_free_memory_size(), 512U);
-    EXPECT_EQ(kernel.block_address(block), address);
-    EXPECT_EQ(memory.read_u32(address), 0x12345678U);
-    kernel.free_partition(block);
-    EXPECT_THROW(kernel.free_partition(block), std::out_of_range);
-    EXPECT_THROW(kernel.block_address(block), std::out_of_range);
-    EXPECT_EQ(kernel.free_memory_size(), 1024U);
-    EXPECT_EQ(kernel.largest_free_memory_size(), 1024U);
+    const auto callback = kernel.create_callback(GuestAddress{0x800}, GuestAddress{0});
+    const auto event = synchronization.create_event_flag({GuestAddress{0x800}, 0, 0, GuestAddress{0}});
+    const std::set identifiers{thread, block, semaphore, mutex, callback, event};
+    EXPECT_EQ(identifiers.size(), 6U);
+    EXPECT_EQ(partitions.address(block), GuestAddress{256});
+    EXPECT_THROW(partitions.address(semaphore), std::out_of_range);
 }
 
 TEST(KernelTest, ThreadStackUsesAFreedPartitionRangeWithoutOverlappingLiveBlocks)
 {
     Memory memory(GuestAddress{0x1000}, 2304);
-    Kernel kernel(memory, {0x1000, 0x1900}, GuestAddress{0});
-    const auto low = kernel.allocate_partition({2, 0, 512});
-    const auto middle = kernel.allocate_partition({2, 0, 1024});
-    const auto high = kernel.allocate_partition({2, 0, 512});
-    const auto low_address = kernel.block_address(low);
-    const auto high_address = kernel.block_address(high);
+    std::uint32_t next_id{1};
+    AddressArena arena(0x1000, 0x1900);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
+    PartitionMemory partitions(arena, next_id);
+    const auto low = partitions.allocate({2, 0, 512});
+    const auto middle = partitions.allocate({2, 0, 1024});
+    const auto high = partitions.allocate({2, 0, 512});
+    const auto low_address = partitions.address(low);
+    const auto high_address = partitions.address(high);
     memory.write_u32(low_address, 0x12345678);
     memory.write_u32(high_address, 0xABCDEF00);
-    kernel.free_partition(middle);
+    partitions.free(middle);
     const auto thread = kernel.create_thread({GuestAddress{0x1000}, 512, 0x20, "worker", 0});
     const auto info = kernel.thread_status(thread);
     EXPECT_EQ(info.stack.value(), 0x1500U);
     EXPECT_EQ(info.stack_size.value(), 512U);
-    EXPECT_EQ(kernel.free_memory_size(), 512U);
-    EXPECT_THROW(kernel.free_partition(thread), std::out_of_range);
-    const auto remainder = kernel.allocate_partition({2, 1, 512});
-    EXPECT_EQ(kernel.block_address(remainder), GuestAddress{0x1300});
-    EXPECT_EQ(kernel.free_memory_size(), 0U);
+    EXPECT_EQ(partitions.free_size(), 512U);
+    EXPECT_THROW(partitions.free(thread), std::out_of_range);
+    const auto remainder = partitions.allocate({2, 1, 512});
+    EXPECT_EQ(partitions.address(remainder), GuestAddress{0x1300});
+    EXPECT_EQ(partitions.free_size(), 0U);
     EXPECT_EQ(memory.read_u32(low_address), 0x12345678U);
     EXPECT_EQ(memory.read_u32(high_address), 0xABCDEF00U);
-}
-
-TEST(KernelTest, AllocationPreservesAddressesAtTheEndOfTheGuestAddressSpace)
-{
-    Memory memory(GuestAddress{0xFFFFFB00}, 1280);
-    Kernel kernel(memory, {0xFFFFFB00, 0x100000000}, GuestAddress{0});
-    const auto high = kernel.allocate_partition({2, 1, 1});
-    EXPECT_EQ(kernel.block_address(high), GuestAddress{0xFFFFFF00});
-    EXPECT_EQ(kernel.free_memory_size(), 768U);
 }
 
 TEST(KernelTest, WaitingThreadKeepsItsStateAcrossVblanksUntilItsWakeup)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     auto &state = kernel.current_thread_state();
     state.load_linked = true;
@@ -557,7 +520,9 @@ TEST(KernelTest, WaitingThreadKeepsItsStateAcrossVblanksUntilItsWakeup)
 TEST(KernelTest, HigherPriorityReadyThreadsPreemptAtBoundariesAndResumeSavedThreads)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto main = kernel.current_thread_id();
     const auto low = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x30, "low", 0});
@@ -603,7 +568,9 @@ TEST(KernelTest, HigherPriorityReadyThreadsPreemptAtBoundariesAndResumeSavedThre
 TEST(KernelTest, ExitCallbackRunsOnOwnerAndRestoresCpuStateWithoutEndingSleep)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0x100});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0x100});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto main = kernel.current_thread_id();
     const auto owner = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x11, "callbacks", 0});
@@ -676,7 +643,9 @@ TEST(KernelTest, ExitCallbackRunsOnOwnerAndRestoresCpuStateWithoutEndingSleep)
 TEST(KernelTest, EarlyExitRequestWaitsForCallbackEnabledSleepAndNonzeroReturnDeletesCallback)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     kernel.request_exit();
     const auto id = kernel.create_callback(GuestAddress{0x800}, GuestAddress{0});
@@ -705,7 +674,9 @@ TEST(KernelTest, EarlyExitRequestWaitsForCallbackEnabledSleepAndNonzeroReturnDel
 TEST(KernelTest, CallbackValidationRejectsInvalidEntriesIdsAndInsufficientStack)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     EXPECT_THROW(kernel.create_callback(GuestAddress{0}, GuestAddress{0}), std::runtime_error);
     EXPECT_THROW(kernel.create_callback(GuestAddress{0x801}, GuestAddress{0}), std::runtime_error);
@@ -731,7 +702,9 @@ TEST(KernelTest, GeInterruptPreservesIdleWaitAndCompletionsDuringItsExecution)
             SCOPED_TRACE(kind);
             SCOPED_TRACE(complete_during);
             Memory memory(GuestAddress{0}, 0x40000);
-            Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+            std::uint32_t next_id{1};
+            AddressArena arena(0, 0x40000);
+            Kernel kernel(memory, arena, next_id, GuestAddress{0});
             kernel.initialize(GuestAddress{0x400}, {});
             const auto id = kernel.current_thread_id();
             auto saved = kernel.current_thread_state();
@@ -790,7 +763,9 @@ TEST(KernelTest, GeInterruptPreservesIdleWaitAndCompletionsDuringItsExecution)
 TEST(KernelTest, GeInterruptDefersHigherPriorityThreadsUntilItsReturn)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto main = kernel.current_thread_id();
     ASSERT_TRUE(kernel.enter_interrupt_callback(GuestAddress{0x800}, 7, GuestAddress{0}));
@@ -813,7 +788,9 @@ TEST(KernelTest, GeInterruptDefersHigherPriorityThreadsUntilItsReturn)
 TEST(KernelTest, GeInterruptUsesAWaitingThreadAfterTheLastRunningThreadExits)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto main = kernel.current_thread_id();
     const auto worker = kernel.create_thread({GuestAddress{0x900}, 0x1000, 0x30, "worker", 0});
@@ -837,7 +814,9 @@ TEST(KernelTest, GeInterruptUsesAWaitingThreadAfterTheLastRunningThreadExits)
 TEST(KernelTest, GeInterruptDefersWhileAnExitCallbackWaitsAndAllowsTimeToAdvance)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     const auto callback = kernel.create_callback(GuestAddress{0x800}, GuestAddress{0});
     kernel.register_exit_callback(callback);
@@ -858,10 +837,12 @@ TEST(KernelTest, GeInterruptDefersWhileAnExitCallbackWaitsAndAllowsTimeToAdvance
     EXPECT_TRUE(kernel.enter_interrupt_callback(GuestAddress{0x900}, 7, GuestAddress{0}));
 }
 
-TEST(KernelTest, VblankWaitTargetsTheNextEdgeAndEventFlagIdsAreValidated)
+TEST(KernelTest, VblankWaitTargetsTheNextEdge)
 {
     Memory memory(GuestAddress{0}, 0x40000);
-    Kernel kernel(memory, {0, 0x40000}, GuestAddress{0});
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0});
     kernel.initialize(GuestAddress{0x400}, {});
     for (const auto edge : {16'684U, 33'367U, 50'050U})
     {
@@ -874,13 +855,6 @@ TEST(KernelTest, VblankWaitTargetsTheNextEdgeAndEventFlagIdsAreValidated)
         ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
         EXPECT_EQ(kernel.current_thread_state().registers[2], 0U);
     }
-    memory.write_bytes(GuestAddress{0x800}, Payload{'G', 'U', 0});
-    const auto id = kernel.create_event_flag({GuestAddress{0x800}, 0x200, 3, GuestAddress{0}});
-    kernel.delete_event_flag(id);
-    EXPECT_THROW(kernel.delete_event_flag(id), std::runtime_error);
-    EXPECT_THROW(kernel.create_event_flag({GuestAddress{0x800}, 1, 3, GuestAddress{0}}), std::runtime_error);
-    EXPECT_THROW(kernel.create_event_flag({GuestAddress{0x800}, 0x200, 3, GuestAddress{4}}), std::runtime_error);
-    EXPECT_THROW(kernel.create_event_flag({GuestAddress{0x40000}, 0x200, 3, GuestAddress{0}}), std::out_of_range);
 }
 
 } // namespace psp::detail

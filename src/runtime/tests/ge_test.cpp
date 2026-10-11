@@ -18,8 +18,8 @@ class GeTest : public testing::Test
 {
 protected:
     GeTest()
-        : memory(create_psp_memory(GuestAddress{0x08000000}, 0x40000)),
-          kernel(memory, {0x08000000, 0x08040000}, GuestAddress{0x08000100}), ge(memory, kernel, 1000)
+        : memory(create_psp_memory(GuestAddress{0x08000000}, 0x40000)), arena(0x08000000, 0x08040000),
+          kernel(memory, arena, next_id, GuestAddress{0x08000100}), ge(memory, kernel, 1000)
     {
         kernel.initialize(GuestAddress{0x08000400}, {});
     }
@@ -70,6 +70,8 @@ protected:
     }
 
     Memory memory;
+    std::uint32_t next_id{1};
+    AddressArena arena;
     Kernel kernel;
     Ge ge;
 };

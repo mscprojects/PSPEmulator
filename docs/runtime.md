@@ -15,11 +15,14 @@
 
 Each component has one header and one source file. None receives a `Runtime&`.
 
-- `Runtime`: owns the components, steps the selected thread, enforces the instruction budget, and is the only code that advances guest time.
+- `Runtime`: owns the components, the shared address arena, and the object ID counter; steps the selected thread, enforces the instruction budget, and is the only code that advances guest time.
 - `Cpu`: executes one Allegrex instruction on a supplied `CpuState`; see [CPU reference](/docs/cpu-reference.md).
 - `Memory`: RAM, VRAM, and address aliases; see [guest memory](/docs/memory.md).
-- `Kernel`: threads, scheduling, guest clock, vblank timing, interrupts, callbacks, sync objects, and partition block IDs.
-- `AddressArena`: free guest address ranges shared by thread stacks and partition blocks.
+- `Kernel`: threads, scheduling, guest clock, vblank timing, interrupts, and callbacks.
+- `PartitionMemory`: partition block IDs and ranges.
+- `Synchronization`: lightweight mutexes, semaphores, and event flags; mutex operations receive the current thread ID for ownership checks.
+- `AddressArena`: free guest address ranges shared by thread stacks, the return sentinel, and partition blocks.
+- Threads, callbacks, partition blocks, and synchronization objects use the same ID sequence.
 - `SyscallDispatcher`: binds imports and maps guest registers to component calls.
 - `Display`: active and pending framebuffers and the captured frame.
 - `Controller`: host input, sampling mode, and pending reads.

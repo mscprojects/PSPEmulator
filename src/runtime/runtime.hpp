@@ -26,7 +26,12 @@ public:
 private:
     LoadedPrx loaded_;
     Cpu cpu_;
+    // All kernel objects share IDs; stacks and partition blocks share allocatable RAM.
+    std::uint32_t next_kernel_id_{1};
+    AddressArena arena_;
     Kernel kernel_;
+    PartitionMemory partitions_;
+    Synchronization synchronization_;
     GuestIo io_;
     Display display_;
     Controller controller_;
