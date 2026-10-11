@@ -31,11 +31,20 @@ constexpr std::uint32_t kRegion1 = 0x15;
 constexpr std::uint32_t kRegion2 = 0x16;
 constexpr std::uint32_t kLightingEnable = 0x17;
 constexpr std::uint32_t kDepthClipEnable = 0x1C;
+constexpr std::uint32_t kTextureEnable = 0x1E;
 constexpr std::uint32_t kLogicOpEnable = 0x28;
 constexpr std::uint32_t kShadeMode = 0x50;
 constexpr std::uint32_t kFrameBufferPointer = 0x9C;
 constexpr std::uint32_t kFrameBufferWidth = 0x9D;
+constexpr std::uint32_t kTextureAddress = 0xA0;
+constexpr std::uint32_t kTextureWidth = 0xA8;
+constexpr std::uint32_t kTextureSize = 0xB8;
+constexpr std::uint32_t kTextureMode = 0xC2;
+constexpr std::uint32_t kTextureFormat = 0xC3;
 constexpr std::uint32_t kClutLoad = 0xC4;
+constexpr std::uint32_t kTextureFilter = 0xC6;
+constexpr std::uint32_t kTextureWrap = 0xC7;
+constexpr std::uint32_t kTextureFunction = 0xC9;
 constexpr std::uint32_t kFrameBufferPixelFormat = 0xD2;
 constexpr std::uint32_t kClearMode = 0xD3;
 constexpr std::uint32_t kScissor1 = 0xD4;
@@ -67,7 +76,8 @@ bool state_register(std::uint32_t command)
            (command >= 0x3A && command <= 0x4D) || command == 0x50 || command == 0x51 ||
            (command >= 0x53 && command <= 0x58) || (command >= 0x5B && command <= 0xB5) ||
            (command >= 0xB8 && command <= 0xD0) || (command >= 0xD2 && command <= 0xE9) || command == 0xEB ||
-           command == 0xEC || command == 0xEE;
+           command == 0xEC || command == 0xEE || (command >= 0xF0 && command <= 0xF6) || command == 0xF8 ||
+           command == 0xF9;
 }
 
 } // namespace
@@ -349,6 +359,13 @@ void Ge::execute(List &list, std::uint32_t word)
             throw std::runtime_error("GE CLUT loading is unsupported");
         }
         break;
+    case 0xF7: // Immediate vertex alpha/primitive: only the all-zero reset point is supported.
+        if (value != 0 || registers_[0xF0] != 0 || registers_[0xF1] != 0 || registers_[0xF2] != 0 ||
+            registers_[0xF6] != 0)
+        {
+            throw std::runtime_error("GE immediate drawing is unsupported");
+        }
+        break;
     default:
         if (!state_register(command))
         {
@@ -365,25 +382,58 @@ void Ge::draw(std::uint32_t primitive)
     const auto type = primitive >> 16;
     const auto clearing = (registers_[kClearMode] & 1U) != 0;
     const auto format = registers_[kVertexType];
-    const bool floating = format == 0x80019CU; // RGBA8888 + float XYZ + through mode.
-    if ((!floating && format != 0x80011CU) ||
-        (clearing ? floating || type != 6 || count != 2 : type != 3 || count != 3))
+    const bool textured = format == 0x80019FU; // Float UV + RGBA8888 + float XYZ + through mode.
+    const bool floating = format == 0x80019CU || textured;
+    const bool sprite = type == 6 && count == 2;
+    if ((!floating && format != 0x80011CU) || (clearing ? floating || !sprite : !sprite && (type != 3 || count != 3)) ||
+        (textured && !sprite))
     {
-        throw std::runtime_error("GE supports one unindexed 2D triangle or one clear sprite per PRIM");
+        throw std::runtime_error("GE supports one unindexed 2D triangle, sprite, or integer clear per PRIM");
     }
     if (registers_[kFrameBufferPixelFormat] != 3 || registers_[kShadeMode] > 1 || registers_[kColorMask] != 0 ||
         registers_[kAlphaMask] != 0 ||
-        (clearing ? registers_[kClearMode] != 0x101 && registers_[kClearMode] != 0x301 : registers_[kDepthMask] != 1))
+        (clearing ? registers_[kClearMode] != 0x101 && registers_[kClearMode] != 0x301
+                  : !sprite && registers_[kDepthMask] != 1))
     {
         throw std::runtime_error("Unsupported GE framebuffer, shade, mask, or depth state");
     }
-    // Every enable flag except depth clipping selects an unsupported pipeline feature.
+    // Texture mapping is supported only for sprites with float UV coordinates.
     for (auto command = kLightingEnable; command <= kLogicOpEnable; ++command)
     {
-        if (command != kDepthClipEnable && registers_[command] != 0)
+        if (command != kDepthClipEnable && !(command == kTextureEnable && textured) && registers_[command] != 0)
         {
             throw std::runtime_error(fmt::format("Unsupported enabled GE feature 0x{:x}", command));
         }
+    }
+    std::optional<RasterTexture> texture;
+    if (textured)
+    {
+        if (registers_[kTextureEnable] != 1 || registers_[kTextureMode] != 0 || registers_[kTextureFormat] != 3 ||
+            registers_[kTextureFilter] != 0 || registers_[kTextureWrap] != 0x101 ||
+            (registers_[kTextureFunction] != 3 && registers_[kTextureFunction] != 0x103))
+        {
+            throw std::runtime_error("GE supports linear RGBA8888 nearest/clamp replacement textures");
+        }
+        const auto size = registers_[kTextureSize];
+        if ((size & ~0x0F0FU) != 0 || (size & 15) > 10 || ((size >> 8) & 15) > 10)
+        {
+            throw std::runtime_error("Unsupported GE texture dimensions");
+        }
+        texture = RasterTexture{.address = physical(GuestAddress{(registers_[kTextureAddress] & 0xFFFFF0U) |
+                                                                 ((registers_[kTextureWidth] & 0xF0000U) << 8)}),
+                                .stride = registers_[kTextureWidth] & 0x7FFU,
+                                .width = 1 << (size & 15),
+                                .height = 1 << ((size >> 8) & 15)};
+        if (texture->stride < static_cast<std::uint32_t>(texture->width))
+        {
+            throw std::runtime_error("GE texture stride is too small");
+        }
+        validate_pointer(memory_, texture->address);
+        memory_.validate_range(texture->address, std::size_t{texture->stride} * texture->height * 4);
+    }
+    if (!clearing && sprite && registers_[kRegion1] != 0)
+    {
+        throw std::runtime_error("GE sprite region offsets are unsupported");
     }
     // Region and scissor bounds both clip to the LCD.
     const RenderTarget target{
@@ -401,21 +451,25 @@ void Ge::draw(std::uint32_t primitive)
         throw std::runtime_error("GE framebuffer stride is too small");
     }
     memory_.validate_range(target.framebuffer, std::size_t{target.stride} * kLcdHeight * 4);
-    const std::size_t vertex_size = floating ? 16 : 12;
+    const std::size_t vertex_size = textured ? 24 : floating ? 16 : 12;
     validate_pointer(memory_, vertices_);
     memory_.validate_range(vertices_, count * vertex_size);
     // Decode all input before any pixel write, including NaN/range validation.
     std::array<RasterVertex, 3> decoded{};
     for (std::size_t index = 0; index < count; ++index)
     {
-        decoded[index] =
-            read_vertex(GuestAddress{vertices_.value_of() + static_cast<std::uint32_t>(index * vertex_size)}, floating);
+        decoded[index] = read_vertex(
+            GuestAddress{vertices_.value_of() + static_cast<std::uint32_t>(index * vertex_size)}, floating, textured);
     }
     if (clearing)
     {
         const auto channels =
             (registers_[kClearMode] & 0x200U) != 0 ? ClearChannels::ColorAndAlpha : ClearChannels::Color;
         draw_clear(memory_, target, {decoded[0], decoded[1]}, channels);
+    }
+    else if (sprite)
+    {
+        draw_sprite(memory_, target, {decoded[0], decoded[1]}, texture);
     }
     else
     {
@@ -424,11 +478,12 @@ void Ge::draw(std::uint32_t primitive)
     vertices_ = GuestAddress{vertices_.value_of() + static_cast<std::uint32_t>(count * vertex_size)};
 }
 
-RasterVertex Ge::read_vertex(GuestAddress address, bool floating) const
+RasterVertex Ge::read_vertex(GuestAddress address, bool floating, bool textured) const
 {
+    const auto attributes = textured ? 8U : 0U;
     const auto coordinate = [&](std::uint32_t offset)
     {
-        const auto pointer = GuestAddress{address.value_of() + offset};
+        const auto pointer = GuestAddress{address.value_of() + attributes + offset};
         if (!floating)
         {
             return static_cast<std::int32_t>(memory_.read_u16(pointer)) * 16;
@@ -440,7 +495,19 @@ RasterVertex Ge::read_vertex(GuestAddress address, bool floating) const
         }
         return static_cast<std::int32_t>(value * 16); // Provisional 1/16-pixel truncation.
     };
-    return {coordinate(4), coordinate(floating ? 8 : 6), memory_.read_u32(address)};
+    RasterVertex vertex{coordinate(4), coordinate(floating ? 8 : 6),
+                        memory_.read_u32(GuestAddress{address.value_of() + attributes})};
+    if (textured)
+    {
+        vertex.u = std::bit_cast<float>(memory_.read_u32(address));
+        vertex.v = std::bit_cast<float>(memory_.read_u32(GuestAddress{address.value_of() + 4}));
+        if (!std::isfinite(vertex.u) || !std::isfinite(vertex.v) || std::abs(vertex.u) > 65535.0F ||
+            std::abs(vertex.v) > 65535.0F)
+        {
+            throw std::runtime_error("GE texture coordinate is nonfinite or outside the supported range");
+        }
+    }
+    return vertex;
 }
 
 } // namespace psp::detail

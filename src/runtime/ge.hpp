@@ -20,7 +20,7 @@ struct GeSubmission
 };
 
 // Incremental command processor. State registers persist across lists. Only unindexed,
-// untextured 2D triangles and clear sprites are passed to the rasterizer; active
+// 2D triangles, sprites, and clears are passed to the rasterizer; active
 // unsupported features fail before modifying VRAM.
 class Ge
 {
@@ -73,7 +73,7 @@ private:
     GuestAddress relative_address(std::uint32_t low) const;
     void execute(List &list, std::uint32_t word);
     void draw(std::uint32_t primitive);
-    RasterVertex read_vertex(GuestAddress address, bool floating) const;
+    RasterVertex read_vertex(GuestAddress address, bool floating, bool textured) const;
 
     Memory &memory_;
     Kernel &kernel_;

@@ -57,6 +57,24 @@ protected:
         memory.write_u16(GuestAddress{address + 6}, static_cast<std::uint16_t>(y));
     }
 
+    std::vector<std::uint32_t> textured_drawing()
+    {
+        auto words = drawing(true);
+        words.insert(words.end(), {0x1280019F, 0x1E000001, 0xA0004000, 0xA8080004, 0xB8000101, 0xC3000003, 0xC7000101,
+                                   0xC9000103, 0xE7000000});
+        return words;
+    }
+
+    void textured_vertex(unsigned index, const RasterVertex &vertex)
+    {
+        const auto address = 0x08002000 + index * 24;
+        memory.write_u32(GuestAddress{address}, std::bit_cast<std::uint32_t>(vertex.u));
+        memory.write_u32(GuestAddress{address + 4}, std::bit_cast<std::uint32_t>(vertex.v));
+        memory.write_u32(GuestAddress{address + 8}, vertex.color);
+        memory.write_u32(GuestAddress{address + 12}, std::bit_cast<std::uint32_t>(static_cast<float>(vertex.x) / 16));
+        memory.write_u32(GuestAddress{address + 16}, std::bit_cast<std::uint32_t>(static_cast<float>(vertex.y) / 16));
+    }
+
     std::uint32_t pixel(unsigned x, unsigned y, std::uint32_t offset = 0)
     {
         return memory.read_u32(GuestAddress{0x04000000 + offset + (y * 512 + x) * 4});
@@ -309,6 +327,68 @@ TEST_F(GeTest, UnsupportedDrawingStateFailsBeforeWritingVram)
         isolated.enqueue({GuestAddress{0x08001000}, GuestAddress{0}, 0xFFFFFFFF, GuestAddress{0}});
         EXPECT_THROW(while (isolated.runnable()) isolated.step(), std::runtime_error);
         EXPECT_EQ(memory.read_bytes(GuestAddress{0x04000000}, original.size()), original);
+    }
+}
+
+TEST_F(GeTest, TexturedSpritesDecodeAliasedAddressAndAdvanceVertexPointerAcrossPrimitives)
+{
+    memory.write_u32(GuestAddress{0x08004000}, 0xFFFFFFFF);
+    memory.write_u32(GuestAddress{0x08004004}, 0xFF000000);
+    memory.write_u32(GuestAddress{0x08004010}, 0xFF0000FF);
+    memory.write_u32(GuestAddress{0x08004014}, 0xFF00FF00);
+    textured_vertex(0, {0, 0, 0, 0, 0});
+    textured_vertex(1, {32, 32, 0, 2, 2});
+    textured_vertex(2, {32, 0, 0, 0, 0});
+    textured_vertex(3, {64, 32, 0, 2, 2});
+    memory.write_u32(GuestAddress{0x04000000}, 0x44000000);
+    auto words = textured_drawing();
+    words.insert(words.end(), {0xA8480004, 0x04060002, 0x04060002, 0x0F000000, 0x0C000000});
+    submit(words);
+    drain();
+    EXPECT_EQ(pixel(0, 0), 0x44FFFFFFU);
+    EXPECT_EQ(pixel(0, 1), 0x000000FFU);
+    EXPECT_EQ(pixel(1, 1), 0x0000FF00U);
+    EXPECT_EQ(pixel(2, 0), 0x00FFFFFFU);
+    EXPECT_EQ(pixel(2, 1), 0x000000FFU);
+    EXPECT_EQ(pixel(3, 1), 0x0000FF00U);
+    EXPECT_EQ(pixel(4, 0), 0U);
+}
+
+TEST_F(GeTest, InvalidTextureStateAndCoordinatesFailBeforeAnyPixelWrite)
+{
+    textured_vertex(0, {0, 0, 0, 0, 0});
+    textured_vertex(1, {32, 32, 0, 2, 2});
+    const auto original = memory.read_bytes(GuestAddress{0x04000000}, 0x200000);
+    for (const auto bad :
+         {0xA00FFFF0U, 0xA8080001U, 0xB8000B01U, 0xC2000001U, 0xC2000100U, 0xC2010000U, 0xC3000002U, 0xC6000101U,
+          0xC7000000U, 0xC9000000U, 0xC9010103U, 0x15000001U, 0x23000001U, 0x1E000000U, 0x0103FFE0U})
+    {
+        SCOPED_TRACE(bad);
+        Ge isolated(memory, kernel, 100);
+        auto words = textured_drawing();
+        words.insert(words.end(), {bad, 0x04060002});
+        for (std::size_t index = 0; index < words.size(); ++index)
+            memory.write_u32(GuestAddress{0x08001000 + static_cast<std::uint32_t>(index * 4)}, words[index]);
+        isolated.enqueue({GuestAddress{0x08001000}, GuestAddress{0}, 0xFFFFFFFF, GuestAddress{0}});
+        EXPECT_THROW(while (isolated.runnable()) isolated.step(), std::exception);
+        EXPECT_EQ(memory.read_bytes(GuestAddress{0x04000000}, original.size()), original);
+    }
+    for (const auto invalid :
+         {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), 65536.0F})
+    {
+        for (const auto offset : {0U, 4U})
+        {
+            Ge isolated(memory, kernel, 100);
+            textured_vertex(1, {32, 32, 0, 2, 2});
+            memory.write_u32(GuestAddress{0x08002018 + offset}, std::bit_cast<std::uint32_t>(invalid));
+            auto words = textured_drawing();
+            words.push_back(0x04060002);
+            for (std::size_t index = 0; index < words.size(); ++index)
+                memory.write_u32(GuestAddress{0x08001000 + static_cast<std::uint32_t>(index * 4)}, words[index]);
+            isolated.enqueue({GuestAddress{0x08001000}, GuestAddress{0}, 0xFFFFFFFF, GuestAddress{0}});
+            EXPECT_THROW(while (isolated.runnable()) isolated.step(), std::runtime_error);
+            EXPECT_EQ(memory.read_bytes(GuestAddress{0x04000000}, original.size()), original);
+        }
     }
 }
 

@@ -120,6 +120,8 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
         case 0xAA73C935: // sceKernelExitThread
             kernel_.exit_thread();
             return arg(0);
+        case 0x616403BA: // sceKernelTerminateThread
+            return kernel_.terminate_thread(arg(0));
         case 0x293B45B8: // sceKernelGetThreadId
             return kernel_.current_thread_id();
         case 0x94AA61EE: // sceKernelGetThreadCurrentPriority
@@ -289,13 +291,38 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
             break;
         }
     }
+    if (binding.library == Library::Utils && binding.nid == 0x34B9FA9E) // sceKernelDcacheWritebackInvalidateRange
+    {
+        // CPU, GE, and DMA share coherent storage until a cache model is added.
+        // Hardware checks the signed size, without requiring a mapped byte range.
+        return (arg(1) & 0x80000000U) != 0 ? 0x80000104U : 0;
+    }
+    if (binding.library == Library::Dmac && binding.nid == 0x617F3FE6) // sceDmacMemcpy
+    {
+        if (arg(2) == 0)
+        {
+            return 0x80000104; // SCE_KERNEL_ERROR_INVALID_SIZE
+        }
+        const auto destination = GuestAddress{arg(0)};
+        memory_.validate_range(destination, arg(2));
+        const auto bytes = memory_.read_bytes(GuestAddress{arg(1)}, arg(2));
+        memory_.write_bytes(destination, bytes);
+        // Large DMA copies block their caller. Use PPSSPP's measured 236 bytes/us
+        // approximation until DMA transfer timing is modeled separately.
+        if (arg(2) >= 272)
+        {
+            kernel_.delay_thread(arg(2) / 236);
+            return std::nullopt;
+        }
+        return 0;
+    }
     throw std::runtime_error(fmt::format("Unsupported import {}:0x{:x}", binding.name, binding.nid));
 }
 
 // Calls into other libraries fail with their name and NID only if the guest invokes them.
 SyscallDispatcher::Library SyscallDispatcher::library_from_name(std::string_view name)
 {
-    constexpr std::array<std::pair<std::string_view, Library>, 10> libraries{{
+    constexpr std::array<std::pair<std::string_view, Library>, 12> libraries{{
         {"sceGe_user", Library::Ge},
         {"sceDisplay", Library::Display},
         {"ThreadManForUser", Library::ThreadManager},
@@ -306,6 +333,8 @@ SyscallDispatcher::Library SyscallDispatcher::library_from_name(std::string_view
         {"sceUtility", Library::Utility},
         {"sceCtrl", Library::Controller},
         {"LoadExecForUser", Library::LoadExec},
+        {"UtilsForUser", Library::Utils},
+        {"sceDmac", Library::Dmac},
     }};
     const auto library = std::ranges::find(libraries, name, &std::pair<std::string_view, Library>::first);
     return library == libraries.end() ? Library::Unsupported : library->second;

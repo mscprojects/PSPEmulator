@@ -27,7 +27,7 @@ Each component has one header and one source file. None receives a `Runtime&`.
 - `Display`: active and pending framebuffers and the captured frame.
 - `Controller`: host input, sampling mode, and pending reads.
 - `Ge`: display lists, GE callbacks, and drawing-state validation.
-- `rasterizer.hpp`: draws triangles and clears into a validated framebuffer; never reads GE registers.
+- `rasterizer.hpp`: draws triangles, sprites, and clears into a validated framebuffer; never reads GE registers.
 - `GuestIo`: captured output and the autotest emulator device.
 - `guest_structures.hpp`: little-endian guest layouts with compile-time size and offset checks.
 - `lcd.hpp`: panel size and 60000/1001 Hz refresh, shared by the runtime and the SDL frontend.
@@ -65,7 +65,9 @@ Threads (`ThreadManForUser`):
 
 - `sceKernelCreateThread` (`0x446D8DE6`): name, entry, priority, stack size (at least 512 bytes), and attributes; the stack comes from the allocation arena.
 - `sceKernelStartThread` (`0xF475845D`): copies `a1` bytes from `a2` to the top of the new stack and makes the thread ready.
+- Stopped threads can be restarted with fresh CPU state and new arguments; the existing stack allocation is reused.
 - `sceKernelExitThread` (`0xAA73C935`), `sceKernelGetThreadId` (`0x293B45B8`), `sceKernelGetThreadCurrentPriority` (`0x94AA61EE`).
+- `sceKernelTerminateThread` (`0x616403BA`): stops another ready thread or cancels its delay/vblank wait. Returns `ILLEGAL_THID` for self/zero and `DORMANT` for a stopped thread. Callback and device-wait cancellation are unsupported.
 - Unsupported: thread deletion, priority changes, and stack reclamation.
 
 Synchronization (needed by Newlib startup in `cpu_div`):
@@ -83,6 +85,13 @@ I/O and system parameters:
 - `StdioForUser` `0x172D316E`, `0xA6BAB2E9`, and `0xF78BA90A` return descriptors 0, 1, and 2.
 - `sceUtilityGetSystemParamInt` (`sceUtility`, `0xA5DA2406`): IDs 6 and 7 return 0 (UTC, no daylight saving); other IDs throw.
 - The runtime never touches host files; guest libc does all formatting.
+
+Cache and DMA:
+
+- `sceKernelDcacheWritebackInvalidateRange` (`UtilsForUser`, `0x34B9FA9E`): CPU, GE, and DMA share coherent storage. No cache flush is needed. Negative sizes return `0x80000104`; other sizes succeed, including unmapped ranges, following [hardware size checks](/third_party/pspautotests/tests/misc/dcache.expected).
+- `sceDmacMemcpy` (`sceDmac`, `0x617F3FE6`): copies between validated RAM/VRAM ranges and their aliases. An invalid range faults before any destination write; zero size returns `0x80000104`.
+- Copies of at least 272 bytes block the caller for `size / 236` microseconds, using [PPSSPP's DMA timing approximation](https://github.com/hrydgard/ppsspp/blob/f70df399ab3fd58ac36aae79622f55717d137d13/Core/HLE/sceDmac.cpp). This allows other ready threads to run.
+- Transfer bytes become visible immediately. Cache lines, concurrent DMA transfers, and progressive transfer visibility are not modeled.
 
 ## Interrupts
 
@@ -140,11 +149,15 @@ Services (`Kernel_Library`):
 - `sceGeListSync` (`0x03444EB4`) and `sceGeDrawSync` (`0xB287BD61`): mode 1 polls (done 0, queued 1, running 2, stalled 3); mode 0 waits for END.
 - One command runs alongside each CPU instruction. The GE command budget equals `max_instructions` but is counted separately.
 - Commands: NOP, VADDR, IADDR, BASE, OFFSET_ADDR, JUMP, PRIM, FINISH, END, zero-block CLUT_LOAD, and the state registers a standard GE reset writes. Other commands fail.
+- The all-zero immediate vertex reset (`0xF7`) is accepted; other immediate drawing commands fail.
 - FINISH runs the guest finish callback when interrupts are enabled and no callback is active. It disables interrupts and preemption until it returns, then restores the interrupted thread and its wait.
-- Drawing: one untextured 2D triangle or one integer clear sprite per PRIM, RGBA 8888, clipped to region and scissor. Unsupported state fails before any VRAM write.
-- Rasterization rules are provisional, pending hardware probes: pixel-center coverage, top-left edges, integer barycentric colors, and flat color from the last vertex.
+- Drawing: one untextured 2D triangle, one 2D sprite, or one integer clear sprite per PRIM, RGBA 8888, clipped to region and scissor. Unsupported state and invalid input fail before any VRAM write.
+- Sprites accept RGBA8888 color and integer or float XYZ in through mode. Textured sprites additionally require float UV, a linear RGBA8888 texture with power-of-two dimensions up to 1024 × 1024 and no mipmaps, nearest filtering, clamp on both axes, and REPLACE with RGB or RGBA. Depth testing, blending, and stencil testing must be disabled; normal sprites preserve the framebuffer's alpha/stencil byte. REGION1 must be zero for normal sprites.
+- Sprite coverage uses 1/16-pixel positions and exclusive bottom/right edges. Sprites whose X and Y directions differ rotate the UV axes. [The raster pipeline reference](https://www.ppsspp.org/docs/psp-hardware/gpu/raster-pipeline/) describes the hardware rounding rules.
+- [`precisionnearest2d`](/third_party/pspautotests/tests/gpu/filtering/precisionnearest2d.expected) verifies orientations, UV offsets, and all 16 negative subpixel X/Y offsets at small and magnified power-of-two scales. Hardware reciprocal-table and fixed-point gradient rounding for other scales remain provisional.
+- Triangle rasterization remains provisional: pixel-center coverage, top-left edges, integer barycentric colors, and flat color from the last vertex.
 - `sceKernelCreateEventFlag` (`0x55C20A00`) and `sceKernelDeleteEventFlag` (`0xEF9E4C70`): create and delete only, as graphics initialization needs.
-- Unsupported: textures, depth and stencil, blending, 3D transforms, VFPU, SIGNAL/CALL/RET, list cancellation, and saved GE contexts.
+- Unsupported: textured triangles, other texture formats/functions/filtering/address modes, swizzling and mipmaps, depth and stencil, blending, 3D transforms, VFPU, SIGNAL/CALL/RET, list cancellation, and saved GE contexts.
 
 ## Sources
 

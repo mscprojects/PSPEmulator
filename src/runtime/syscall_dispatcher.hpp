@@ -37,6 +37,8 @@ class SyscallDispatcher
         Utility,
         Controller,
         LoadExec,
+        Utils,
+        Dmac,
     };
 
     struct ImportBinding

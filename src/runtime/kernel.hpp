@@ -148,6 +148,9 @@ public:
     void resume_interrupts(std::uint32_t flags);
     bool interrupts_enabled() const;
     void exit_thread();
+    // Stop another ready thread or cancel its timed wait. Stopped threads can be restarted.
+    // Callback and device-wait cancellation remain unsupported.
+    std::uint32_t terminate_thread(std::uint32_t id);
     void exit_game();
     int exit_code() const;
     GuestThreadInfo thread_status(std::uint32_t id) const;

@@ -100,7 +100,7 @@ std::uint32_t Kernel::create_thread(ThreadCreation creation)
 void Kernel::start_thread(std::uint32_t id, GuestAddress arguments, std::uint32_t argument_size)
 {
     auto &thread = threads_.at(id);
-    if (thread.lifecycle != Lifecycle::Created)
+    if (thread.lifecycle != Lifecycle::Created && thread.lifecycle != Lifecycle::Finished)
     {
         throw std::runtime_error("Thread already started");
     }
@@ -109,6 +109,11 @@ void Kernel::start_thread(std::uint32_t id, GuestAddress arguments, std::uint32_
     {
         throw std::runtime_error("Thread arguments exceed stack capacity");
     }
+    thread.state = CpuState{.program_counter = thread.creation.entry};
+    thread.state.registers[28] = global_pointer_.value_of();
+    thread.state.registers[31] = return_address_.value_of();
+    thread.wait = Wait::None;
+    thread.callback.reset();
     place_arguments(thread, bytes);
     thread.lifecycle = Lifecycle::Started;
     ready_.push_back(id);
@@ -421,6 +426,30 @@ void Kernel::exit_thread()
         throw std::runtime_error("Exiting a thread from a GE interrupt callback is unsupported");
     }
     threads_.at(current_thread_).lifecycle = Lifecycle::Finished;
+}
+
+std::uint32_t Kernel::terminate_thread(std::uint32_t id)
+{
+    if (id == 0 || id == current_thread_)
+    {
+        return 0x80020197; // SCE_KERNEL_ERROR_ILLEGAL_THID
+    }
+    auto &thread = threads_.at(id);
+    if (thread.lifecycle == Lifecycle::Created || thread.lifecycle == Lifecycle::Finished)
+    {
+        return 0x800201A2; // SCE_KERNEL_ERROR_DORMANT
+    }
+    if (thread.callback ||
+        (thread.lifecycle == Lifecycle::Waiting && thread.wait != Wait::Delay && thread.wait != Wait::Vblank))
+    {
+        throw std::runtime_error("Terminating callback or device waits is unsupported");
+    }
+    std::erase(ready_, id);
+    std::erase_if(delayed_, [id](const auto &item) { return item.second == id; });
+    thread.lifecycle = Lifecycle::Finished;
+    thread.wait = Wait::None;
+    thread.state.registers[2] = 0x800201AC; // SCE_KERNEL_ERROR_THREAD_TERMINATED
+    return 0;
 }
 
 void Kernel::exit_game()

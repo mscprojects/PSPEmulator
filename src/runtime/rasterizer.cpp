@@ -69,6 +69,47 @@ void draw_triangle(Memory &memory, const RenderTarget &target, std::array<Raster
     }
 }
 
+void draw_sprite(Memory &memory, const RenderTarget &target, const std::array<RasterVertex, 2> &vertices,
+                 const std::optional<RasterTexture> &texture)
+{
+    const auto &first = vertices[0];
+    const auto &second = vertices[1];
+    if (first.x == second.x || first.y == second.y)
+    {
+        return;
+    }
+    const bool rotated = (first.x > second.x) != (first.y > second.y);
+    // PSP sprites use asymmetric start rounding; rotated sprites round both axes alike.
+    const auto left = std::max(target.left, (std::min(first.x, second.x) + 6) >> 4);
+    const auto top = std::max(target.top, (std::min(first.y, second.y) + (rotated ? 6 : 7)) >> 4);
+    const auto right = std::min(target.right + 1, (std::max(first.x, second.x) + 7) >> 4);
+    const auto bottom = std::min(target.bottom + 1, (std::max(first.y, second.y) + 7) >> 4);
+    // Exact hardware reciprocal/gradient rounding for non-power-of-two extents is
+    // still provisional. precisionnearest2d covers power-of-two scales and UV offsets.
+    for (int y = top; y < bottom; ++y)
+    {
+        for (int x = left; x < right; ++x)
+        {
+            auto color = second.color;
+            if (texture)
+            {
+                const auto horizontal = static_cast<double>(x * 16 + 8 - first.x) / (second.x - first.x);
+                const auto vertical = static_cast<double>(y * 16 + 8 - first.y) / (second.y - first.y);
+                const auto u = first.u + (static_cast<double>(second.u) - first.u) * (rotated ? vertical : horizontal);
+                const auto v = first.v + (static_cast<double>(second.v) - first.v) * (rotated ? horizontal : vertical);
+                const auto column =
+                    static_cast<std::uint32_t>(std::clamp(u, 0.0, static_cast<double>(texture->width - 1)));
+                const auto row =
+                    static_cast<std::uint32_t>(std::clamp(v, 0.0, static_cast<double>(texture->height - 1)));
+                color =
+                    memory.read_u32(GuestAddress{texture->address.value_of() + (row * texture->stride + column) * 4});
+            }
+            const auto address = pixel_address(target, x, y);
+            memory.write_u32(address, (color & 0xFFFFFFU) | (memory.read_u32(address) & 0xFF000000U));
+        }
+    }
+}
+
 void draw_clear(Memory &memory, const RenderTarget &target, const std::array<RasterVertex, 2> &vertices,
                 ClearChannels channels)
 {

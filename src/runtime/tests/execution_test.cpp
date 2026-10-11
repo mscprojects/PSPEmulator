@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
@@ -208,6 +209,29 @@ TEST(ExecutionTest, BundledLlscMatchesEntireHardwareOutputAtDifferentAddresses)
     }
 }
 
+TEST(ExecutionTest, NearestSpritesMatchEntireHardwareOutputAtDifferentAddresses)
+{
+    const std::string path = std::string(PSPAUTOTESTS_ROOT) + "/tests/gpu/filtering/precisionnearest2d";
+    std::ifstream input(path + ".prx", std::ios::binary);
+    std::ifstream expected_file(path + ".expected", std::ios::binary);
+    ASSERT_TRUE(input.is_open());
+    ASSERT_TRUE(expected_file.is_open());
+    const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    const std::string expected{std::istreambuf_iterator<char>(expected_file), std::istreambuf_iterator<char>()};
+    const auto parsed = read_prx(payload);
+    for (const std::uint32_t base : {0x08800000U, 0x08900000U})
+    {
+        SCOPED_TRACE(base);
+        ExecutionOptions options;
+        options.load_address = GuestAddress{base};
+        const auto result = execute_prx(parsed, options);
+        EXPECT_EQ(result.exit_code, 0);
+        EXPECT_EQ(result.output, expected);
+        EXPECT_GT(result.instructions_executed, 0U);
+        EXPECT_LE(result.instructions_executed, options.max_instructions);
+    }
+}
+
 TEST(ExecutionTest, HelloWorldPrintsAndExitsAtDifferentAddresses)
 {
     std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/hello_world.prx", std::ios::binary);
@@ -225,6 +249,42 @@ TEST(ExecutionTest, HelloWorldPrintsAndExitsAtDifferentAddresses)
         EXPECT_EQ(result.output, "Hello World\n");
         EXPECT_GT(result.instructions_executed, 0U);
         EXPECT_LE(result.instructions_executed, options.max_instructions);
+    }
+}
+
+TEST(ExecutionTest, DmaCopiesBetweenRamAndVramAliases)
+{
+    for (const auto size : {4U, 320U})
+    {
+        SCOPED_TRACE(size);
+        ServicePrxFixture program("sceDmac", {0x617F3FE6});
+        program.fixture.word(0x380, 0x12345678);
+        program.argument(0, 0x44000000);
+        program.argument(1, 0x48800280);
+        program.argument(2, size);
+        program.call(0);
+        program.argument(0, 0x488002C0);
+        program.argument(1, 0x04000000);
+        program.argument(2, 4);
+        program.call(0);
+        program.argument(0, 0x088002C0);
+        program.instruction(0x8C820000); // lw $v0, 0($a0): return the copied word.
+        EXPECT_EQ(execute_prx(program.finish()).exit_code, 0x12345678);
+    }
+}
+
+TEST(ExecutionTest, CacheWritebackRangeMatchesHardwareSizeChecks)
+{
+    // misc/dcache.expected: a null pointer and INT_MAX size succeed; negative sizes fail.
+    for (const auto size : {0U, 4U, 0x7FFFFFFFU, 0xFFFFFFFFU, 0xFFFFFFFCU})
+    {
+        SCOPED_TRACE(size);
+        ServicePrxFixture program("UtilsForUser", {0x34B9FA9E});
+        program.argument(0, 0);
+        program.argument(1, size);
+        program.call(0);
+        const auto result = execute_prx(program.finish());
+        EXPECT_EQ(std::bit_cast<std::uint32_t>(result.exit_code), size > 0x7FFFFFFF ? 0x80000104U : 0U);
     }
 }
 

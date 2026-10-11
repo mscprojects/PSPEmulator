@@ -5,6 +5,7 @@ An early PSP emulator: an Allegrex interpreter, a high-level PSP runtime, and an
 What runs today:
 
 - Bundled hardware tests `cpu_alu`, `cpu_branch2`, `cpu_div`, `lsu`, `llsc`, `fpu_branch`, `fpu_branch_hazard`, `fpu`, `roundmode`, `rounding`, `fpu_nan`, and `fcr`, matching their hardware output byte for byte.
+- Bundled GPU test `gpu/filtering/precisionnearest2d`: textured 2D sprites with nearest filtering, clamp addressing, flips, and subpixel offsets, matching the full hardware output.
 - Unmodified homebrew samples: console Hello World, screen Hello World, and a basic controller sample with its exit callback.
 - A project-owned sample that draws an RGB triangle through GE display lists and software rasterization.
 
@@ -40,6 +41,7 @@ Other recipes:
 
 ```sh
 ./build/pspemu third_party/pspautotests/tests/cpu/cpu_alu/cpu_alu.prx
+./build/pspemu third_party/pspautotests/tests/gpu/filtering/precisionnearest2d.prx
 ./build/pspemu src/runtime/tests/fixtures/triangle.prx --window
 ./build/pspemu program.prx --max-instructions 1000000
 ```

@@ -99,6 +99,79 @@ TEST_F(RasterizerTest, TrianglesWriteOnlyInsideTheInclusiveClipRectangle)
     }
 }
 
+TEST_F(RasterizerTest, SpritesSamplePaddedTexturesInEveryCornerOrientationAndPreserveStencil)
+{
+    constexpr std::uint32_t white = 0x44FFFFFF;
+    constexpr std::uint32_t black = 0x44000000;
+    constexpr std::uint32_t red = 0x440000FF;
+    constexpr std::uint32_t green = 0x4400FF00;
+    memory.write_u32(GuestAddress{0x04100000}, 0xFFFFFFFF);
+    memory.write_u32(GuestAddress{0x04100004}, 0xFF000000);
+    memory.write_u32(GuestAddress{0x04100010}, 0xFF0000FF);
+    memory.write_u32(GuestAddress{0x04100014}, 0xFF00FF00);
+    const RasterTexture texture{GuestAddress{0x04100000}, 4, 2, 2};
+    constexpr std::array<std::array<RasterVertex, 2>, 4> orientations{{
+        {{{0, 0, 0, 0, 0}, {64, 32, 0, 2, 2}}},
+        {{{64, 32, 0, 0, 0}, {0, 0, 0, 2, 2}}},
+        {{{64, 0, 0, 0, 0}, {0, 32, 0, 2, 2}}},
+        {{{0, 32, 0, 0, 0}, {64, 0, 0, 2, 2}}},
+    }};
+    constexpr std::array<std::array<std::uint32_t, 8>, 4> expected{{
+        {white, white, black, black, red, red, green, green},
+        {green, green, red, red, black, black, white, white},
+        {red, red, white, white, green, green, black, black},
+        {black, black, green, green, white, white, red, red},
+    }};
+    for (std::size_t orientation = 0; orientation < orientations.size(); ++orientation)
+    {
+        SCOPED_TRACE(orientation);
+        for (unsigned index = 0; index < 8; ++index)
+            memory.write_u32(GuestAddress{0x04000000 + (index / 4 * 512 + index % 4) * 4}, 0x44000000);
+        draw_sprite(memory, target, orientations[orientation], texture);
+        std::array<std::uint32_t, 8> actual{};
+        for (unsigned index = 0; index < 8; ++index)
+            actual[index] = pixel(static_cast<int>(index % 4), static_cast<int>(index / 4));
+        EXPECT_EQ(actual, expected[orientation]);
+        EXPECT_EQ(pixel(4, 0), 0U);
+        EXPECT_EQ(pixel(0, 2), 0U);
+    }
+}
+
+TEST_F(RasterizerTest, SpriteCoverageUsesSubpixelStartAndExclusiveEndAndClipsWrites)
+{
+    memory.write_u32(GuestAddress{0x04000000}, 0xAA000000);
+    draw_sprite(memory, target, {{{9, 8, 0}, {40, 40, 0x12345678}}}, std::nullopt);
+    EXPECT_EQ(pixel(0, 0), 0xAA345678U);
+    EXPECT_EQ(pixel(1, 1), 0x00345678U);
+    EXPECT_EQ(pixel(2, 0), 0U);
+    EXPECT_EQ(pixel(0, 2), 0U);
+
+    draw_sprite(memory, target, {{{10, 9, 0}, {48, 48, 0xFFABCDEF}}}, std::nullopt);
+    EXPECT_EQ(pixel(0, 0), 0xAA345678U);
+    EXPECT_EQ(pixel(1, 1), 0x00ABCDEFU);
+    target.left = 2;
+    target.top = 2;
+    target.right = 2;
+    target.bottom = 2;
+    draw_sprite(memory, target, {at(0, 0, 0), at(4, 4, 0xFFFFFFFF)}, std::nullopt);
+    EXPECT_EQ(pixel(2, 2), 0x00FFFFFFU);
+    EXPECT_EQ(pixel(3, 2), 0U);
+}
+
+TEST_F(RasterizerTest, SpriteNearestSamplingClampsBothEndsOfTheTexture)
+{
+    memory.write_u32(GuestAddress{0x04100000}, 0xFFFFFFFF);
+    memory.write_u32(GuestAddress{0x04100004}, 0xFF000000);
+    memory.write_u32(GuestAddress{0x04100008}, 0xFF0000FF);
+    memory.write_u32(GuestAddress{0x0410000C}, 0xFF00FF00);
+    const RasterTexture texture{GuestAddress{0x04100000}, 2, 2, 2};
+    draw_sprite(memory, target, {{{0, 0, 0, -1, -1}, {64, 64, 0, 3, 3}}}, texture);
+    EXPECT_EQ(pixel(0, 0), 0x00FFFFFFU);
+    EXPECT_EQ(pixel(3, 0), 0U);
+    EXPECT_EQ(pixel(0, 3), 0x000000FFU);
+    EXPECT_EQ(pixel(3, 3), 0x0000FF00U);
+}
+
 TEST_F(RasterizerTest, ClearFillsHalfOpenRectangleAndColorOnlyClearPreservesAlpha)
 {
     for (const auto channels : {ClearChannels::Color, ClearChannels::ColorAndAlpha})

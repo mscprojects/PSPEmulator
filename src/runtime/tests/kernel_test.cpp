@@ -38,7 +38,6 @@ TEST(KernelTest, ThreadSelectionPreservesSeparateCpuStatesAndReturnStatus)
     EXPECT_EQ(kernel.current_thread_state().registers[31], first_state.registers[31]);
     EXPECT_EQ(kernel.thread_status(first).entry.value(), 0x400U);
     EXPECT_EQ(kernel.thread_status(first).status.value(), 16U); // stopped
-    EXPECT_THROW(kernel.start_thread(first, GuestAddress{0}, 0), std::runtime_error);
     EXPECT_EQ(kernel.thread_status(0).name[0], 's');
 
     // Returning to the sentinel finishes only after the CPU has executed the
@@ -48,6 +47,90 @@ TEST(KernelTest, ThreadSelectionPreservesSeparateCpuStatesAndReturnStatus)
     state.registers[2] = 7;
     EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Finished);
     EXPECT_EQ(kernel.exit_code(), 7);
+}
+
+TEST(KernelTest, TerminationCancelsReadyAndTimedWaitsAndRestartResetsCpuState)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0x100});
+    kernel.initialize(GuestAddress{0x400}, {});
+    const auto main = kernel.current_thread_id();
+    const auto worker = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x20, "worker", 0});
+    EXPECT_EQ(kernel.terminate_thread(main), 0x80020197U);
+    EXPECT_EQ(kernel.terminate_thread(worker), 0x800201A2U);
+    kernel.start_thread(worker, GuestAddress{0}, 0);
+    EXPECT_EQ(kernel.terminate_thread(worker), 0U);
+    EXPECT_EQ(kernel.thread_status(worker).status.value(), 16U);
+    EXPECT_EQ(kernel.thread_status(worker).exit_status.value(), 0x800201ACU);
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_id(), main);
+
+    kernel.start_thread(worker, GuestAddress{0}, 0);
+    kernel.delay_thread(10);
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
+    ASSERT_EQ(kernel.current_thread_id(), worker);
+    const auto fresh_state = kernel.current_thread_state();
+    kernel.current_thread_state().registers[16] = 123;
+    kernel.current_thread_state().floating_point_registers[0] = 456;
+    kernel.current_thread_state().load_linked = true;
+    kernel.delay_thread(100);
+    kernel.advance_time(10);
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
+    ASSERT_EQ(kernel.current_thread_id(), main);
+    EXPECT_EQ(kernel.terminate_thread(worker), 0U);
+    EXPECT_FALSE(kernel.next_wakeup_time());
+    kernel.start_thread(worker, GuestAddress{0}, 0);
+    kernel.delay_thread(0);
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
+    ASSERT_EQ(kernel.current_thread_id(), worker);
+    EXPECT_EQ(kernel.current_thread_state(), fresh_state);
+    kernel.advance_time(100);
+    EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_id(), worker); // The cancelled deadline cannot wake this new run.
+
+    // A normal exit also permits a fresh invocation, with new arguments.
+    kernel.exit_thread();
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
+    memory.write_u32(GuestAddress{0x1000}, 0x12345678);
+    kernel.start_thread(worker, GuestAddress{0x1000}, 4);
+    kernel.delay_thread(0);
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
+    ASSERT_EQ(kernel.current_thread_id(), worker);
+    EXPECT_EQ(kernel.current_thread_state().registers[4], 4U);
+    EXPECT_EQ(memory.read_u32(GuestAddress{kernel.current_thread_state().registers[5]}), 0x12345678U);
+}
+
+TEST(KernelTest, RestartAfterExitingACallbackDiscardsItsSavedContinuation)
+{
+    Memory memory(GuestAddress{0}, 0x40000);
+    std::uint32_t next_id{1};
+    AddressArena arena(0, 0x40000);
+    Kernel kernel(memory, arena, next_id, GuestAddress{0x100});
+    kernel.initialize(GuestAddress{0x400}, {});
+    const auto worker = kernel.create_thread({GuestAddress{0x800}, 0x1000, 0x10, "worker", 0});
+    kernel.start_thread(worker, GuestAddress{0}, 0);
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
+    ASSERT_EQ(kernel.current_thread_id(), worker);
+    kernel.register_exit_callback(kernel.create_callback(GuestAddress{0x900}, GuestAddress{0}));
+    kernel.sleep_thread_callbacks();
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
+    kernel.request_exit();
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
+    ASSERT_EQ(kernel.current_thread_id(), worker);
+    kernel.exit_thread();
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
+
+    kernel.start_thread(worker, GuestAddress{0}, 0);
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
+    ASSERT_EQ(kernel.current_thread_id(), worker);
+    const auto restarted = kernel.current_thread_state();
+    EXPECT_EQ(restarted.program_counter, GuestAddress{0x800});
+    ASSERT_TRUE(kernel.enter_interrupt_callback(GuestAddress{0xA00}, 0, GuestAddress{0}));
+    kernel.current_thread_state().program_counter = GuestAddress{restarted.registers[31] + 4};
+    ASSERT_EQ(kernel.select_next_thread(), ThreadSelection::Ready);
+    EXPECT_EQ(kernel.current_thread_state(), restarted);
 }
 
 TEST(KernelTest, DelayedThreadResumesAfterAnotherThreadExits)
