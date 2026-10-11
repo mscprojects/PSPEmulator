@@ -32,6 +32,8 @@ constexpr std::uint32_t kRegion2 = 0x16;
 constexpr std::uint32_t kLightingEnable = 0x17;
 constexpr std::uint32_t kDepthClipEnable = 0x1C;
 constexpr std::uint32_t kTextureEnable = 0x1E;
+constexpr std::uint32_t kBlendEnable = 0x21;
+constexpr std::uint32_t kStencilEnable = 0x24;
 constexpr std::uint32_t kLogicOpEnable = 0x28;
 constexpr std::uint32_t kShadeMode = 0x50;
 constexpr std::uint32_t kFrameBufferPointer = 0x9C;
@@ -49,6 +51,11 @@ constexpr std::uint32_t kFrameBufferPixelFormat = 0xD2;
 constexpr std::uint32_t kClearMode = 0xD3;
 constexpr std::uint32_t kScissor1 = 0xD4;
 constexpr std::uint32_t kScissor2 = 0xD5;
+constexpr std::uint32_t kStencilTest = 0xDC;
+constexpr std::uint32_t kStencilOperation = 0xDD;
+constexpr std::uint32_t kBlendMode = 0xDF;
+constexpr std::uint32_t kBlendFixedSource = 0xE0;
+constexpr std::uint32_t kBlendFixedDestination = 0xE1;
 constexpr std::uint32_t kDepthMask = 0xE7;
 constexpr std::uint32_t kColorMask = 0xE8;
 constexpr std::uint32_t kAlphaMask = 0xE9;
@@ -400,10 +407,35 @@ void Ge::draw(std::uint32_t primitive)
     // Texture mapping is supported only for sprites with float UV coordinates.
     for (auto command = kLightingEnable; command <= kLogicOpEnable; ++command)
     {
-        if (command != kDepthClipEnable && !(command == kTextureEnable && textured) && registers_[command] != 0)
+        const bool sprite_operation =
+            sprite && (command == kBlendEnable || command == kStencilEnable) && registers_[command] == 1;
+        if (command != kDepthClipEnable && !(command == kTextureEnable && textured) && !sprite_operation &&
+            registers_[command] != 0)
         {
             throw std::runtime_error(fmt::format("Unsupported enabled GE feature 0x{:x}", command));
         }
+    }
+    SpriteOperations operations;
+    if (!clearing && registers_[kBlendEnable] != 0)
+    {
+        const auto mode = registers_[kBlendMode];
+        if ((mode & ~0x7FFU) != 0 || ((mode >> 8) & 7) > 5 || (mode & 15) > 10 || ((mode >> 4) & 15) > 10)
+        {
+            throw std::runtime_error("Unsupported GE blend operation or factors");
+        }
+        operations.blend = RasterBlend{.operation = static_cast<BlendOperation>((mode >> 8) & 7),
+                                       .source_factor = static_cast<BlendFactor>(mode & 15),
+                                       .destination_factor = static_cast<BlendFactor>((mode >> 4) & 15),
+                                       .source_fixed = registers_[kBlendFixedSource],
+                                       .destination_fixed = registers_[kBlendFixedDestination]};
+    }
+    if (!clearing && registers_[kStencilEnable] != 0)
+    {
+        if ((registers_[kStencilTest] & 255) != 1 || registers_[kStencilOperation] != 0x020202)
+        {
+            throw std::runtime_error("GE supports only ALWAYS/REPLACE stencil on 2D sprites");
+        }
+        operations.stencil_reference = static_cast<std::uint8_t>((registers_[kStencilTest] >> 8) & 255);
     }
     std::optional<RasterTexture> texture;
     if (textured)
@@ -427,7 +459,8 @@ void Ge::draw(std::uint32_t primitive)
                           .stride = registers_[kTextureWidth] & 0x7FFU,
                           .width = 1 << (size & 15),
                           .height = 1 << ((size >> 8) & 15),
-                          .filter = registers_[kTextureFilter] == 0 ? TextureFilter::Nearest : TextureFilter::Linear};
+                          .filter = registers_[kTextureFilter] == 0 ? TextureFilter::Nearest : TextureFilter::Linear,
+                          .use_alpha = (registers_[kTextureFunction] & 0x100U) != 0};
         if (texture->stride < static_cast<std::uint32_t>(texture->width))
         {
             throw std::runtime_error("GE texture stride is too small");
@@ -473,7 +506,7 @@ void Ge::draw(std::uint32_t primitive)
     }
     else if (sprite)
     {
-        draw_sprite(memory_, target, {decoded[0], decoded[1]}, texture);
+        draw_sprite(memory_, target, {decoded[0], decoded[1]}, texture, operations);
     }
     else
     {

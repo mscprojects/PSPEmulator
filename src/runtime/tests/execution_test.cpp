@@ -218,7 +218,7 @@ TEST(ExecutionTest, GivenBundledLlsc_WhenRunAtDifferentLoadAddresses_ThenEntireO
 
 TEST_P(SpritePrxExecutionTest, WhenRunAtDifferentLoadAddresses_ThenEntireOutputMatchesHardware)
 {
-    const auto directory = fs::path{PSPAUTOTESTS_ROOT} / "tests" / "gpu" / "filtering";
+    const auto directory = fs::path{PSPAUTOTESTS_ROOT} / "tests" / "gpu";
     std::ifstream input(directory / (std::string{GetParam()} + ".prx"), std::ios::binary);
     std::ifstream expected_file(directory / (std::string{GetParam()} + ".expected"), std::ios::binary);
     ASSERT_TRUE(input.is_open());
@@ -231,6 +231,11 @@ TEST_P(SpritePrxExecutionTest, WhenRunAtDifferentLoadAddresses_ThenEntireOutputM
         SCOPED_TRACE(base);
         ExecutionOptions options;
         options.load_address = GuestAddress{base};
+        if (std::string_view{GetParam()} == "commands/blend")
+        {
+            // This unoptimized guest fills and copies full framebuffers for every blend case.
+            options.max_instructions = 1'000'000'000;
+        }
         const auto result = execute_prx(parsed, options);
         EXPECT_EQ(result.exit_code, 0);
         EXPECT_EQ(result.output, expected);
@@ -239,8 +244,9 @@ TEST_P(SpritePrxExecutionTest, WhenRunAtDifferentLoadAddresses_ThenEntireOutputM
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(BundledFiltering, SpritePrxExecutionTest,
-                         testing::Values("precisionnearest2d", "precisionlinear2d"));
+INSTANTIATE_TEST_SUITE_P(BundledSprites, SpritePrxExecutionTest,
+                         testing::Values("filtering/precisionnearest2d", "filtering/precisionlinear2d",
+                                         "commands/blend"));
 
 TEST(ExecutionTest, GivenHelloWorld_WhenRunAtDifferentLoadAddresses_ThenPrintsAndExits)
 {

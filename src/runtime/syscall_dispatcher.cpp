@@ -291,6 +291,11 @@ std::optional<std::uint32_t> SyscallDispatcher::dispatch(CpuState &state, const 
             break;
         }
     }
+    if (binding.library == Library::Utils && binding.nid == 0xB435DEC5) // sceKernelDcacheWritebackInvalidateAll
+    {
+        // CPU, GE, and DMA share coherent storage until a cache model is added.
+        return 0;
+    }
     if (binding.library == Library::Utils && binding.nid == 0x34B9FA9E) // sceKernelDcacheWritebackInvalidateRange
     {
         // CPU, GE, and DMA share coherent storage until a cache model is added.

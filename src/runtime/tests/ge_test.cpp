@@ -374,6 +374,87 @@ TEST_F(GeTest, GivenLinearTexture_WhenFilterChangesBetweenSprites_ThenUsesSelect
     EXPECT_EQ(pixel(8, 0), 0U);
 }
 
+TEST_F(GeTest, GivenBlendingAndStencil_WhenStateChangesBetweenSprites_ThenReadsOldAlphaAndAppliesNewState)
+{
+    vertex(0, 0, 0, 0);
+    vertex(1, 1, 1, 0x80808080);
+    vertex(2, 1, 0, 0);
+    vertex(3, 2, 1, 0x80808080);
+    vertex(4, 2, 0, 0);
+    vertex(5, 3, 1, 0x80556677);
+    memory.write_u32(GuestAddress{0x04000000}, 0x40808080);
+    memory.write_u32(GuestAddress{0x04000004}, 0x90909090);
+    memory.write_u32(GuestAddress{0x04000008}, 0x33000000);
+    auto words = drawing();
+    words.insert(words.end(), {0x21000001, 0xDF0000A4, 0xE1000000, // Source * destination alpha.
+                               0x24000001, 0xDCFFAA01, 0xDD020202, 0x04060002, 0xDCFF0001,
+                               0x04060002, // A zero stencil reference is still a replacement.
+                               0x21000000, 0x24000000, 0x04060002, 0x0F000000, 0x0C000000});
+    submit(words);
+    drain();
+    EXPECT_EQ(pixel(0, 0), 0xAA202020U);
+    EXPECT_EQ(pixel(1, 0), 0x00484848U);
+    EXPECT_EQ(pixel(2, 0), 0x33556677U);
+    EXPECT_EQ(pixel(3, 0), 0U);
+}
+
+TEST_F(GeTest, GivenReplacementTexture_WhenAlphaBlending_ThenRgbaUsesTexelAlphaAndRgbUsesVertexAlpha)
+{
+    memory.write_u32(GuestAddress{0x08004000}, 0x800000FF);
+    textured_vertex(0, {0, 0, 0, 0, 0});
+    textured_vertex(1, {16, 16, 0x40000000, 0, 0});
+    for (const auto rgba : {false, true})
+    {
+        SCOPED_TRACE(rgba);
+        memory.write_u32(GuestAddress{0x04000000}, 0x44FF0000);
+        auto words = textured_drawing();
+        words.insert(words.end(),
+                     {rgba ? 0xC9000103U : 0xC9000003U, 0x21000001, 0xDF000032, 0x04060002, 0x0F000000, 0x0C000000});
+        submit(words);
+        drain();
+        EXPECT_EQ(pixel(0, 0), rgba ? 0x447F0080U : 0x44BF0040U);
+        EXPECT_EQ(pixel(1, 0), 0U);
+    }
+}
+
+TEST_F(GeTest, GivenClearWithBlendingAndStencilEnabled_WhenDrawing_ThenBypassesBlendAndStencilOperations)
+{
+    vertex(0, 0, 0, 0);
+    vertex(1, 1, 1, 0x12345678);
+    for (const auto alpha : {false, true})
+    {
+        SCOPED_TRACE(alpha);
+        memory.write_u32(GuestAddress{0x04000000}, 0x44000000);
+        auto words = drawing();
+        words.insert(words.end(), {0x21000001, 0xDF000032, 0x24000001, 0xDCFFAA01, 0xDD020202,
+                                   alpha ? 0xD3000301U : 0xD3000101U, 0x04060002, 0x0F000000, 0x0C000000});
+        submit(words);
+        drain();
+        EXPECT_EQ(pixel(0, 0), alpha ? 0x12345678U : 0x44345678U);
+        EXPECT_EQ(pixel(1, 0), 0U);
+    }
+}
+
+TEST_F(GeTest, GivenUnsupportedBlendOrStencilState_WhenDrawingSprite_ThenFailsBeforeWritingVram)
+{
+    vertex(0, 0, 0, 0);
+    vertex(1, 1, 1, 0xFFFFFFFF);
+    const auto original = memory.read_bytes(GuestAddress{0x04000000}, 0x200000);
+    for (const auto bad : {0x21000002U, 0x24000002U, 0xDF000600U, 0xDF00000BU, 0xDF0000B0U, 0xDF000800U, 0xDCFFAA02U,
+                           0xDCFFAA09U, 0xDD000000U, 0xDD020203U})
+    {
+        SCOPED_TRACE(bad);
+        Ge isolated(memory, kernel, 100);
+        auto words = drawing();
+        words.insert(words.end(), {0x21000001, 0xDF000032, 0x24000001, 0xDCFFAA01, 0xDD020202, bad, 0x04060002});
+        for (std::size_t index = 0; index < words.size(); ++index)
+            memory.write_u32(GuestAddress{0x08001000 + static_cast<std::uint32_t>(index * 4)}, words[index]);
+        isolated.enqueue({GuestAddress{0x08001000}, GuestAddress{0}, 0xFFFFFFFF, GuestAddress{0}});
+        EXPECT_THROW(while (isolated.runnable()) isolated.step(), std::runtime_error);
+        EXPECT_EQ(memory.read_bytes(GuestAddress{0x04000000}, original.size()), original);
+    }
+}
+
 TEST_F(GeTest, GivenInvalidTextureStateOrCoordinates_WhenDrawing_ThenFailsBeforeAnyPixelWrite)
 {
     textured_vertex(0, {0, 0, 0, 0, 0});

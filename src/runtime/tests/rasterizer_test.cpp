@@ -195,6 +195,51 @@ TEST_F(RasterizerTest, GivenPaddedTexture_WhenLinearSpriteMagnifies_ThenBlendsTe
     EXPECT_EQ(pixel(0, 4), 0U);
 }
 
+TEST_F(RasterizerTest, GivenFixedBlendFactors_WhenDrawingSprite_ThenWeightsEachRgbChannelIndependently)
+{
+    memory.write_u32(GuestAddress{0x04000000}, 0x50604020);
+    const SpriteOperations operations{.blend = RasterBlend{.operation = BlendOperation::Add,
+                                                           .source_factor = BlendFactor::Fixed,
+                                                           .destination_factor = BlendFactor::Fixed,
+                                                           .source_fixed = 0xFF8000,
+                                                           .destination_fixed = 0x0080FF}};
+    draw_sprite(memory, target, {at(0, 0, 0), at(1, 1, 0x90C08040)}, std::nullopt, operations);
+    // Red takes the destination, blue takes the source, green adds two half-weighted terms.
+    EXPECT_EQ(pixel(0, 0), 0x50C06020U);
+    EXPECT_EQ(pixel(1, 0), 0U);
+}
+
+TEST_F(RasterizerTest, GivenNegativeDoubledInverseAlpha_WhenBlending_ThenKeepsSignedTermsUntilFinalClamp)
+{
+    // Source alpha 144 gives inverse-double factor -33. Its midpoint product with
+    // source channel 128 contributes -16; the destination contributes +64.
+    const std::array operations{BlendOperation::Add, BlendOperation::Subtract, BlendOperation::ReverseSubtract};
+    constexpr std::array expected{0x44303030U, 0x44000000U, 0x44505050U};
+    for (std::size_t index = 0; index < operations.size(); ++index)
+    {
+        SCOPED_TRACE(index);
+        memory.write_u32(GuestAddress{0x04000000}, 0x44404040);
+        const SpriteOperations state{.blend = RasterBlend{.operation = operations[index],
+                                                          .source_factor = BlendFactor::OneMinusDoubleSourceAlpha,
+                                                          .destination_factor = BlendFactor::Fixed,
+                                                          .destination_fixed = 0xFFFFFF}};
+        draw_sprite(memory, target, {at(0, 0, 0), at(1, 1, 0x90808080)}, std::nullopt, state);
+        EXPECT_EQ(pixel(0, 0), expected[index]);
+    }
+}
+
+TEST_F(RasterizerTest, GivenDoubledAlpha_WhenSubtracting_ThenClampsAfterCombiningWeightedTerms)
+{
+    memory.write_u32(GuestAddress{0x04000000}, 0x44A0A0A0);
+    const SpriteOperations operations{.blend = RasterBlend{.operation = BlendOperation::Subtract,
+                                                           .source_factor = BlendFactor::DoubleSourceAlpha,
+                                                           .destination_factor = BlendFactor::Fixed,
+                                                           .destination_fixed = 0xFFFFFF}};
+    draw_sprite(memory, target, {at(0, 0, 0), at(1, 1, 0xFFC0C0C0)}, std::nullopt, operations);
+    // The unclamped source contributes 383 and the destination 160: result 223.
+    EXPECT_EQ(pixel(0, 0), 0x44DFDFDFU);
+}
+
 TEST_F(RasterizerTest, GivenFractionalUv_WhenLinearSampling_ThenQuantizesToFourBitWeights)
 {
     memory.write_u32(GuestAddress{0x04100000}, 0);

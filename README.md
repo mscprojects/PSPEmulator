@@ -6,6 +6,7 @@ What runs today:
 
 - Bundled hardware tests `cpu_alu`, `cpu_branch2`, `cpu_div`, `lsu`, `llsc`, `fpu_branch`, `fpu_branch_hazard`, `fpu`, `roundmode`, `rounding`, `fpu_nan`, and `fcr`, matching their hardware output byte for byte.
 - Bundled GPU tests `gpu/filtering/precisionnearest2d` and `precisionlinear2d`: textured 2D sprites with nearest and bilinear filtering, clamp addressing, flips, and subpixel offsets, matching the full hardware output.
+- Bundled GPU test `gpu/commands/blend`: all six 2D sprite blend operations and their source/destination factors, with ALWAYS/REPLACE stencil, matching the full hardware output.
 - Unmodified homebrew samples: console Hello World, screen Hello World, and a basic controller sample with its exit callback.
 - A project-owned sample that draws an RGB triangle through GE display lists and software rasterization.
 
@@ -53,6 +54,7 @@ just run debug src/runtime/tests/fixtures/controller_basic.prx --window --max-in
 just run release third_party/pspautotests/tests/cpu/cpu_alu/cpu_alu.prx
 just run release third_party/pspautotests/tests/gpu/filtering/precisionnearest2d.prx
 just run release third_party/pspautotests/tests/gpu/filtering/precisionlinear2d.prx
+just run release third_party/pspautotests/tests/gpu/commands/blend.prx --max-instructions 1000000000
 just run debug program.prx --max-instructions 1000000
 ```
 
@@ -60,6 +62,7 @@ just run debug program.prx --max-instructions 1000000
 - Headless by default. Guest output goes to stdout, including output captured before a fault.
 - Faults and budget exhaustion report the guest PC and instruction on stderr. A guest that only host input could wake also fails. Both exit nonzero.
 - `--max-instructions` defaults to 50 million. GE commands have a separate limit of the same size.
+- The unoptimized `blend.prx` test repeatedly fills and copies whole framebuffers; use the larger instruction budget shown above.
 - The guest's `argv[0]` is the PRX file name without host directories.
 - `--window` opens a resizable 960 × 544 window with sharp scaling and letterboxing, paced at the PSP's 60000/1001 Hz.
 - The final frame stays visible after the guest exits. Escape or closing the window quits, also during execution.

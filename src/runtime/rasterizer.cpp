@@ -1,6 +1,7 @@
 #include "runtime/rasterizer.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <utility>
 
 namespace psp::detail
@@ -13,6 +14,86 @@ GuestAddress pixel_address(const RenderTarget &target, int x, int y)
 {
     return GuestAddress{target.framebuffer.value_of() +
                         (static_cast<std::uint32_t>(y) * target.stride + static_cast<std::uint32_t>(x)) * 4};
+}
+
+// Both operands are packed PSP colors; their order follows the source/destination blend equation.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+std::uint32_t blend_rgb(std::uint32_t source, std::uint32_t destination, const RasterBlend &blend)
+{
+    const auto source_alpha = static_cast<int>(source >> 24);
+    const auto destination_alpha = static_cast<int>(destination >> 24);
+    std::uint32_t result = 0;
+    for (unsigned shift = 0; shift < 24; shift += 8)
+    {
+        const auto source_color = static_cast<int>((source >> shift) & 255);
+        const auto destination_color = static_cast<int>((destination >> shift) & 255);
+        const auto factor = [&](BlendFactor value, bool source_factor)
+        {
+            const auto other = source_factor ? destination_color : source_color;
+            switch (value)
+            {
+            case BlendFactor::OtherColor:
+                return other;
+            case BlendFactor::OneMinusOtherColor:
+                return 255 - other;
+            case BlendFactor::SourceAlpha:
+                return source_alpha;
+            case BlendFactor::OneMinusSourceAlpha:
+                return 255 - source_alpha;
+            case BlendFactor::DestinationAlpha:
+                return destination_alpha;
+            case BlendFactor::OneMinusDestinationAlpha:
+                return 255 - destination_alpha;
+            case BlendFactor::DoubleSourceAlpha:
+                return 2 * source_alpha;
+            case BlendFactor::OneMinusDoubleSourceAlpha:
+                return 255 - 2 * source_alpha;
+            case BlendFactor::DoubleDestinationAlpha:
+                return 2 * destination_alpha;
+            case BlendFactor::OneMinusDoubleDestinationAlpha:
+                return 255 - 2 * destination_alpha;
+            case BlendFactor::Fixed:
+                return static_cast<int>(((source_factor ? blend.source_fixed : blend.destination_fixed) >> shift) &
+                                        255);
+            }
+            std::unreachable();
+        };
+        // PSP multiplies channel/factor midpoints and truncates each term separately.
+        // Doubled factors may exceed 255; doubled inverse factors may be negative.
+        // See the pinned software blender reference in docs/runtime.md.
+        const auto weighted = [](int color, int weight)
+        {
+            const auto magnitude = ((2 * color + 1) * (2 * std::abs(weight) + 1)) / 1024;
+            return weight < 0 ? -magnitude : magnitude;
+        };
+        int value = 0;
+        switch (blend.operation)
+        {
+        case BlendOperation::Add:
+            value = weighted(source_color, factor(blend.source_factor, true)) +
+                    weighted(destination_color, factor(blend.destination_factor, false));
+            break;
+        case BlendOperation::Subtract:
+            value = weighted(source_color, factor(blend.source_factor, true)) -
+                    weighted(destination_color, factor(blend.destination_factor, false));
+            break;
+        case BlendOperation::ReverseSubtract:
+            value = weighted(destination_color, factor(blend.destination_factor, false)) -
+                    weighted(source_color, factor(blend.source_factor, true));
+            break;
+        case BlendOperation::Minimum:
+            value = std::min(source_color, destination_color);
+            break;
+        case BlendOperation::Maximum:
+            value = std::max(source_color, destination_color);
+            break;
+        case BlendOperation::AbsoluteDifference:
+            value = std::abs(source_color - destination_color);
+            break;
+        }
+        result |= static_cast<std::uint32_t>(std::clamp(value, 0, 255)) << shift;
+    }
+    return result;
 }
 
 std::uint32_t sample_texture(const Memory &memory, const RasterTexture &texture, double u, double v)
@@ -106,7 +187,7 @@ void draw_triangle(Memory &memory, const RenderTarget &target, std::array<Raster
 }
 
 void draw_sprite(Memory &memory, const RenderTarget &target, const std::array<RasterVertex, 2> &vertices,
-                 const std::optional<RasterTexture> &texture)
+                 const std::optional<RasterTexture> &texture, const SpriteOperations &operations)
 {
     const auto &first = vertices[0];
     const auto &second = vertices[1];
@@ -134,9 +215,17 @@ void draw_sprite(Memory &memory, const RenderTarget &target, const std::array<Ra
                 const auto u = first.u + (static_cast<double>(second.u) - first.u) * (rotated ? vertical : horizontal);
                 const auto v = first.v + (static_cast<double>(second.v) - first.v) * (rotated ? horizontal : vertical);
                 color = sample_texture(memory, *texture, u, v);
+                if (!texture->use_alpha)
+                {
+                    color = (color & 0xFFFFFFU) | (second.color & 0xFF000000U);
+                }
             }
             const auto address = pixel_address(target, x, y);
-            memory.write_u32(address, (color & 0xFFFFFFU) | (memory.read_u32(address) & 0xFF000000U));
+            const auto destination = memory.read_u32(address);
+            const auto rgb = operations.blend ? blend_rgb(color, destination, *operations.blend) : color & 0xFFFFFFU;
+            const auto stencil = operations.stencil_reference ? std::uint32_t{*operations.stencil_reference} << 24
+                                                              : destination & 0xFF000000U;
+            memory.write_u32(address, rgb | stencil);
         }
     }
 }
