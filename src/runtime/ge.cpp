@@ -409,21 +409,25 @@ void Ge::draw(std::uint32_t primitive)
     if (textured)
     {
         if (registers_[kTextureEnable] != 1 || registers_[kTextureMode] != 0 || registers_[kTextureFormat] != 3 ||
-            registers_[kTextureFilter] != 0 || registers_[kTextureWrap] != 0x101 ||
+            (registers_[kTextureFilter] != 0 && registers_[kTextureFilter] != 0x101) ||
+            registers_[kTextureWrap] != 0x101 ||
             (registers_[kTextureFunction] != 3 && registers_[kTextureFunction] != 0x103))
         {
-            throw std::runtime_error("GE supports linear RGBA8888 nearest/clamp replacement textures");
+            throw std::runtime_error("GE supports non-swizzled RGBA8888 replacement textures with matching nearest or "
+                                     "linear filters and clamp addressing");
         }
         const auto size = registers_[kTextureSize];
         if ((size & ~0x0F0FU) != 0 || (size & 15) > 10 || ((size >> 8) & 15) > 10)
         {
             throw std::runtime_error("Unsupported GE texture dimensions");
         }
-        texture = RasterTexture{.address = physical(GuestAddress{(registers_[kTextureAddress] & 0xFFFFF0U) |
-                                                                 ((registers_[kTextureWidth] & 0xF0000U) << 8)}),
-                                .stride = registers_[kTextureWidth] & 0x7FFU,
-                                .width = 1 << (size & 15),
-                                .height = 1 << ((size >> 8) & 15)};
+        texture =
+            RasterTexture{.address = physical(GuestAddress{(registers_[kTextureAddress] & 0xFFFFF0U) |
+                                                           ((registers_[kTextureWidth] & 0xF0000U) << 8)}),
+                          .stride = registers_[kTextureWidth] & 0x7FFU,
+                          .width = 1 << (size & 15),
+                          .height = 1 << ((size >> 8) & 15),
+                          .filter = registers_[kTextureFilter] == 0 ? TextureFilter::Nearest : TextureFilter::Linear};
         if (texture->stride < static_cast<std::uint32_t>(texture->width))
         {
             throw std::runtime_error("GE texture stride is too small");

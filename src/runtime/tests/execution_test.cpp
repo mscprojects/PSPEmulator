@@ -136,6 +136,10 @@ class CpuPrxExecutionTest : public testing::TestWithParam<const char *>
 {
 };
 
+class SpritePrxExecutionTest : public testing::TestWithParam<const char *>
+{
+};
+
 TEST_P(CpuPrxExecutionTest, WhenRunAtDifferentLoadAddresses_ThenEntireOutputMatchesHardware)
 {
     const auto directory = fs::path{PSPAUTOTESTS_ROOT} / "tests" / "cpu";
@@ -212,11 +216,11 @@ TEST(ExecutionTest, GivenBundledLlsc_WhenRunAtDifferentLoadAddresses_ThenEntireO
     }
 }
 
-TEST(ExecutionTest, GivenNearestSpritePrx_WhenRunAtDifferentLoadAddresses_ThenEntireOutputMatchesHardware)
+TEST_P(SpritePrxExecutionTest, WhenRunAtDifferentLoadAddresses_ThenEntireOutputMatchesHardware)
 {
     const auto directory = fs::path{PSPAUTOTESTS_ROOT} / "tests" / "gpu" / "filtering";
-    std::ifstream input(directory / "precisionnearest2d.prx", std::ios::binary);
-    std::ifstream expected_file(directory / "precisionnearest2d.expected", std::ios::binary);
+    std::ifstream input(directory / (std::string{GetParam()} + ".prx"), std::ios::binary);
+    std::ifstream expected_file(directory / (std::string{GetParam()} + ".expected"), std::ios::binary);
     ASSERT_TRUE(input.is_open());
     ASSERT_TRUE(expected_file.is_open());
     const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
@@ -234,6 +238,9 @@ TEST(ExecutionTest, GivenNearestSpritePrx_WhenRunAtDifferentLoadAddresses_ThenEn
         EXPECT_LE(result.instructions_executed, options.max_instructions);
     }
 }
+
+INSTANTIATE_TEST_SUITE_P(BundledFiltering, SpritePrxExecutionTest,
+                         testing::Values("precisionnearest2d", "precisionlinear2d"));
 
 TEST(ExecutionTest, GivenHelloWorld_WhenRunAtDifferentLoadAddresses_ThenPrintsAndExits)
 {

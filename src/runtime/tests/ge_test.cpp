@@ -354,24 +354,48 @@ TEST_F(GeTest, GivenAliasedTexture_WhenDrawingSuccessiveSprites_ThenSamplesTextu
     EXPECT_EQ(pixel(4, 0), 0U);
 }
 
+TEST_F(GeTest, GivenLinearTexture_WhenFilterChangesBetweenSprites_ThenUsesSelectedFilter)
+{
+    memory.write_u32(GuestAddress{0x08004000}, 0xFFFFFFFF);
+    memory.write_u32(GuestAddress{0x08004004}, 0xFF000000);
+    memory.write_u32(GuestAddress{0x08004010}, 0xFF0000FF);
+    memory.write_u32(GuestAddress{0x08004014}, 0xFF00FF00);
+    textured_vertex(0, {0, 0, 0, 0, 0});
+    textured_vertex(1, {64, 64, 0, 2, 2});
+    textured_vertex(2, {64, 0, 0, 0, 0});
+    textured_vertex(3, {128, 64, 0, 2, 2});
+    auto words = textured_drawing();
+    words.insert(words.end(), {0xC6000101, 0x04060002, 0xC6000000, 0x04060002, 0x0F000000, 0x0C000000});
+    submit(words);
+    drain();
+    EXPECT_EQ(pixel(1, 1), 0x008F9FBFU); // Linear: two successive 1/4 blends.
+    EXPECT_EQ(pixel(5, 1), 0x00FFFFFFU); // Nearest: the first texel.
+    EXPECT_EQ(pixel(6, 2), 0x0000FF00U);
+    EXPECT_EQ(pixel(8, 0), 0U);
+}
+
 TEST_F(GeTest, GivenInvalidTextureStateOrCoordinates_WhenDrawing_ThenFailsBeforeAnyPixelWrite)
 {
     textured_vertex(0, {0, 0, 0, 0, 0});
     textured_vertex(1, {32, 32, 0, 2, 2});
     const auto original = memory.read_bytes(GuestAddress{0x04000000}, 0x200000);
-    for (const auto bad :
-         {0xA00FFFF0U, 0xA8080001U, 0xB8000B01U, 0xC2000001U, 0xC2000100U, 0xC2010000U, 0xC3000002U, 0xC6000101U,
-          0xC7000000U, 0xC9000000U, 0xC9010103U, 0x15000001U, 0x23000001U, 0x1E000000U, 0x0103FFE0U})
+    for (const auto bad : {0xA00FFFF0U, 0xA8080001U, 0xB8000B01U, 0xC2000001U, 0xC2000100U, 0xC2010000U, 0xC3000002U,
+                           0xC6000001U, 0xC6000100U, 0xC6000004U, 0xC6000105U, 0xC6000202U, 0xC6010101U, 0xC7000000U,
+                           0xC9000000U, 0xC9010103U, 0x15000001U, 0x23000001U, 0x1E000000U, 0x0103FFE0U})
     {
         SCOPED_TRACE(bad);
-        Ge isolated(memory, kernel, 100);
-        auto words = textured_drawing();
-        words.insert(words.end(), {bad, 0x04060002});
-        for (std::size_t index = 0; index < words.size(); ++index)
-            memory.write_u32(GuestAddress{0x08001000 + static_cast<std::uint32_t>(index * 4)}, words[index]);
-        isolated.enqueue({GuestAddress{0x08001000}, GuestAddress{0}, 0xFFFFFFFF, GuestAddress{0}});
-        EXPECT_THROW(while (isolated.runnable()) isolated.step(), std::exception);
-        EXPECT_EQ(memory.read_bytes(GuestAddress{0x04000000}, original.size()), original);
+        for (const auto filter : {0U, 0x101U})
+        {
+            SCOPED_TRACE(filter);
+            Ge isolated(memory, kernel, 100);
+            auto words = textured_drawing();
+            words.insert(words.end(), {0xC6000000 | filter, bad, 0x04060002});
+            for (std::size_t index = 0; index < words.size(); ++index)
+                memory.write_u32(GuestAddress{0x08001000 + static_cast<std::uint32_t>(index * 4)}, words[index]);
+            isolated.enqueue({GuestAddress{0x08001000}, GuestAddress{0}, 0xFFFFFFFF, GuestAddress{0}});
+            EXPECT_THROW(while (isolated.runnable()) isolated.step(), std::exception);
+            EXPECT_EQ(memory.read_bytes(GuestAddress{0x04000000}, original.size()), original);
+        }
     }
     for (const auto invalid :
          {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), 65536.0F})

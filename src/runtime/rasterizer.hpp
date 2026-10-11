@@ -19,13 +19,20 @@ struct RasterVertex
     float v{};
 };
 
-// Linear RGBA8888 texture. The caller validates the stride, dimensions, and full range.
+enum class TextureFilter : std::uint8_t
+{
+    Nearest,
+    Linear,
+};
+
+// Non-swizzled RGBA8888 texture. The caller validates the stride, dimensions, and full range.
 struct RasterTexture
 {
     GuestAddress address;
     std::uint32_t stride;
     int width;
     int height;
+    TextureFilter filter{TextureFilter::Nearest};
 };
 
 // RGBA 8888 framebuffer with an inclusive pixel clip rectangle. The caller validates
@@ -56,7 +63,7 @@ enum class ClearChannels : std::uint8_t
 // vertex color; smooth shading interpolates each channel with integer barycentrics.
 // Degenerate triangles write nothing.
 void draw_triangle(Memory &memory, const RenderTarget &target, std::array<RasterVertex, 3> vertices, Shading shading);
-// Through-mode sprite with nearest sampling, clamp addressing, and replacement RGB.
+// Through-mode sprite with nearest or linear sampling, clamp addressing, and replacement RGB.
 // Mixed corner orientations rotate the UV axes; framebuffer alpha/stencil is preserved.
 void draw_sprite(Memory &memory, const RenderTarget &target, const std::array<RasterVertex, 2> &vertices,
                  const std::optional<RasterTexture> &texture);

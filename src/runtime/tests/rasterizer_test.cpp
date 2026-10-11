@@ -172,6 +172,113 @@ TEST_F(RasterizerTest, SpriteNearestSamplingClampsBothEndsOfTheTexture)
     EXPECT_EQ(pixel(3, 3), 0x0000FF00U);
 }
 
+TEST_F(RasterizerTest, GivenPaddedTexture_WhenLinearSpriteMagnifies_ThenBlendsTexelsAndPreservesStencil)
+{
+    memory.write_u32(GuestAddress{0x04100000}, 0xFFFFFFFF);
+    memory.write_u32(GuestAddress{0x04100004}, 0xFF000000);
+    memory.write_u32(GuestAddress{0x04100008}, 0x12345678); // Row padding must not enter the filter.
+    memory.write_u32(GuestAddress{0x04100010}, 0xFF0000FF);
+    memory.write_u32(GuestAddress{0x04100014}, 0xFF00FF00);
+    const RasterTexture texture{GuestAddress{0x04100000}, 4, 2, 2, TextureFilter::Linear};
+    for (unsigned index = 0; index < 16; ++index)
+        memory.write_u32(GuestAddress{0x04000000 + (index / 4 * 512 + index % 4) * 4}, 0x44000000);
+    draw_sprite(memory, target, {{{0, 0, 0, 0, 0}, {64, 64, 0, 2, 2}}}, texture);
+    // Texel centers lie at 0.5 and 1.5; the interior samples use 1/4 and 3/4 weights.
+    constexpr std::array<std::uint32_t, 16> expected{
+        0x44FFFFFF, 0x44BFBFBF, 0x443F3F3F, 0x44000000, 0x44BFBFFF, 0x448F9FBF, 0x442F5F3F, 0x44003F00,
+        0x443F3FFF, 0x442F5FBF, 0x440F9F3F, 0x4400BF00, 0x440000FF, 0x44003FBF, 0x4400BF3F, 0x4400FF00};
+    std::array<std::uint32_t, 16> actual{};
+    for (unsigned index = 0; index < actual.size(); ++index)
+        actual[index] = pixel(static_cast<int>(index % 4), static_cast<int>(index / 4));
+    EXPECT_EQ(actual, expected);
+    EXPECT_EQ(pixel(4, 0), 0U);
+    EXPECT_EQ(pixel(0, 4), 0U);
+}
+
+TEST_F(RasterizerTest, GivenFractionalUv_WhenLinearSampling_ThenQuantizesToFourBitWeights)
+{
+    memory.write_u32(GuestAddress{0x04100000}, 0);
+    memory.write_u32(GuestAddress{0x04100004}, 0xFFFFFFFF);
+    const RasterTexture texture{GuestAddress{0x04100000}, 2, 2, 1, TextureFilter::Linear};
+    constexpr std::array coordinates{1.0F, 1.0624F, 1.0625F, 1.125F};
+    constexpr std::array<std::uint32_t, 4> expected{0x007F7F7F, 0x007F7F7F, 0x008F8F8F, 0x009F9F9F};
+    for (std::size_t index = 0; index < coordinates.size(); ++index)
+    {
+        SCOPED_TRACE(coordinates[index]);
+        const auto u = coordinates[index];
+        draw_sprite(memory, target, {{{0, 0, 0, u, 0.5F}, {16, 16, 0, u, 0.5F}}}, texture);
+        EXPECT_EQ(pixel(0, 0), expected[index]);
+    }
+}
+
+TEST_F(RasterizerTest, WhenLinearSamplingAtTexelMidpoint_ThenTruncatesHorizontalBlendsBeforeVerticalBlend)
+{
+    memory.write_u32(GuestAddress{0x04100000}, 0xFF000000);
+    memory.write_u32(GuestAddress{0x04100004}, 0xFF010101);
+    memory.write_u32(GuestAddress{0x04100008}, 0xFF010101);
+    memory.write_u32(GuestAddress{0x0410000C}, 0xFF020202);
+    const RasterTexture texture{GuestAddress{0x04100000}, 2, 2, 2, TextureFilter::Linear};
+    memory.write_u32(target.framebuffer, 0x44808080);
+    draw_sprite(memory, target, {{{0, 0, 0, 1, 1}, {16, 16, 0, 1, 1}}}, texture);
+    // Horizontal blends truncate to 0 and 1, so their vertical blend truncates to 0.
+    // A single four-tap average would incorrectly produce 1 in every channel.
+    EXPECT_EQ(pixel(0, 0), 0x44000000U);
+}
+
+TEST_F(RasterizerTest, GivenBorderTexels_WhenLinearUvExceedsBounds_ThenClampsEveryTap)
+{
+    // Exactly the texture is mapped: filtering outside its borders must not read past it.
+    memory.map_region(GuestAddress{0x08000000}, 16);
+    memory.write_u32(GuestAddress{0x08000000}, 0xFFFFFFFF);
+    memory.write_u32(GuestAddress{0x08000004}, 0xFF000000);
+    memory.write_u32(GuestAddress{0x08000008}, 0xFF0000FF);
+    memory.write_u32(GuestAddress{0x0800000C}, 0xFF00FF00);
+    const RasterTexture texture{GuestAddress{0x08000000}, 2, 2, 2, TextureFilter::Linear};
+    draw_sprite(memory, target, {{{0, 0, 0, -1, -1}, {64, 64, 0, 3, 3}}}, texture);
+    EXPECT_EQ(pixel(0, 0), 0x00FFFFFFU);
+    EXPECT_EQ(pixel(3, 0), 0U);
+    EXPECT_EQ(pixel(0, 3), 0x000000FFU);
+    EXPECT_EQ(pixel(3, 3), 0x0000FF00U);
+}
+
+TEST_F(RasterizerTest, GivenSingleTexel_WhenLinearUvIsFarOutsideBounds_ThenSamplesThatTexel)
+{
+    memory.map_region(GuestAddress{0x08000000}, 4);
+    memory.write_u32(GuestAddress{0x08000000}, 0x12345678);
+    const RasterTexture texture{GuestAddress{0x08000000}, 1, 1, 1, TextureFilter::Linear};
+    draw_sprite(memory, target, {{{0, 0, 0, -65535, 65535}, {32, 32, 0, 65535, -65535}}}, texture);
+    EXPECT_EQ(pixel(0, 0), 0x00345678U);
+    EXPECT_EQ(pixel(1, 0), 0x00345678U);
+    EXPECT_EQ(pixel(0, 1), 0x00345678U);
+    EXPECT_EQ(pixel(1, 1), 0x00345678U);
+}
+
+TEST_F(RasterizerTest, GivenClippedLinearSprite_WhenDrawing_ThenKeepsOriginalUvPlaneAndPreservesOutsidePixels)
+{
+    memory.map_region(GuestAddress{0x08000000}, 16);
+    memory.write_u32(GuestAddress{0x08000000}, 0xFFFFFFFF);
+    memory.write_u32(GuestAddress{0x08000004}, 0xFF000000);
+    memory.write_u32(GuestAddress{0x08000008}, 0xFF0000FF);
+    memory.write_u32(GuestAddress{0x0800000C}, 0xFF00FF00);
+    const RasterTexture texture{GuestAddress{0x08000000}, 2, 2, 2, TextureFilter::Linear};
+    target.left = 1;
+    target.top = 1;
+    target.right = 2;
+    target.bottom = 2;
+    const Payload original(0x200000, 0x44);
+    memory.write_bytes(target.framebuffer, original);
+    draw_sprite(memory, target, {{{0, 0, 0, 0, 0}, {64, 64, 0, 2, 2}}}, texture);
+    EXPECT_EQ(pixel(1, 1), 0x448F9FBFU);
+    EXPECT_EQ(pixel(2, 1), 0x442F5F3FU);
+    EXPECT_EQ(pixel(1, 2), 0x442F5FBFU);
+    EXPECT_EQ(pixel(2, 2), 0x440F9F3FU);
+    // Restore the four permitted writes and compare all other VRAM bytes.
+    for (unsigned y = 1; y <= 2; ++y)
+        for (unsigned x = 1; x <= 2; ++x)
+            memory.write_u32(GuestAddress{0x04000000 + (y * 512 + x) * 4}, 0x44444444);
+    EXPECT_EQ(frame(), original);
+}
+
 TEST_F(RasterizerTest, ClearFillsHalfOpenRectangleAndColorOnlyClearPreservesAlpha)
 {
     for (const auto channels : {ClearChannels::Color, ClearChannels::ColorAndAlpha})
