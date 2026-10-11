@@ -7,6 +7,7 @@ What runs today:
 - Bundled hardware tests `cpu_alu`, `cpu_branch2`, `cpu_div`, `lsu`, `llsc`, `fpu_branch`, `fpu_branch_hazard`, `fpu`, `roundmode`, `rounding`, `fpu_nan`, and `fcr`, matching their hardware output byte for byte.
 - Bundled GPU tests `gpu/filtering/precisionnearest2d` and `precisionlinear2d`: textured 2D sprites with nearest and bilinear filtering, clamp addressing, flips, and subpixel offsets, matching the full hardware output.
 - Bundled GPU test `gpu/commands/blend`: all six 2D sprite blend operations and their source/destination factors, with ALWAYS/REPLACE stencil, matching the full hardware output.
+- 2D sprite MODULATE and REPLACE texture functions, RGB/RGBA alpha handling, and fragment color doubling. MODULATE hardware color measurements are replayed through 2D GE tests; the original `gpu/texfunc/modulate.prx` still requires 3D transforms.
 - Unmodified homebrew samples: console Hello World, screen Hello World, and a basic controller sample with its exit callback.
 - A project-owned sample that draws an RGB triangle through GE display lists and software rasterization.
 

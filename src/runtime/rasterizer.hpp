@@ -25,6 +25,12 @@ enum class TextureFilter : std::uint8_t
     Linear,
 };
 
+enum class TextureFunction : std::uint8_t
+{
+    Modulate,
+    Replace,
+};
+
 enum class BlendOperation : std::uint8_t
 {
     Add,
@@ -67,7 +73,8 @@ struct SpriteOperations
     std::optional<std::uint8_t> stencil_reference{};
 };
 
-// Non-swizzled RGBA8888 texture. RGB REPLACE retains vertex alpha when use_alpha is false.
+// Non-swizzled RGBA8888 texture. RGB functions retain vertex alpha when use_alpha is false.
+// Color doubling applies before RGB truncation and clamping; alpha is never doubled.
 // The caller validates the stride, dimensions, and full range.
 struct RasterTexture
 {
@@ -77,6 +84,8 @@ struct RasterTexture
     int height;
     TextureFilter filter{TextureFilter::Nearest};
     bool use_alpha{true};
+    TextureFunction function{TextureFunction::Replace};
+    bool double_color{};
 };
 
 // RGBA 8888 framebuffer with an inclusive pixel clip rectangle. The caller validates
@@ -107,9 +116,9 @@ enum class ClearChannels : std::uint8_t
 // vertex color; smooth shading interpolates each channel with integer barycentrics.
 // Degenerate triangles write nothing.
 void draw_triangle(Memory &memory, const RenderTarget &target, std::array<RasterVertex, 3> vertices, Shading shading);
-// Through-mode sprite with nearest or linear sampling, clamp addressing, and REPLACE texturing.
+// Through-mode sprite with nearest or linear sampling, clamp addressing, and MODULATE/REPLACE texturing.
 // Mixed corner orientations rotate the UV axes. Blend factors read the original framebuffer;
-// stencil replacement happens after RGB blending. The caller validates the operation enums.
+// stencil replacement happens after RGB blending. The caller validates the operation and texture enums.
 void draw_sprite(Memory &memory, const RenderTarget &target, const std::array<RasterVertex, 2> &vertices,
                  const std::optional<RasterTexture> &texture, const SpriteOperations &operations = {});
 // Fill the clipped rectangle spanned by two corners with the second corner's color.

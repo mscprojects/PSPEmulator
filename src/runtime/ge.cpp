@@ -440,13 +440,14 @@ void Ge::draw(std::uint32_t primitive)
     std::optional<RasterTexture> texture;
     if (textured)
     {
+        const auto function = registers_[kTextureFunction];
         if (registers_[kTextureEnable] != 1 || registers_[kTextureMode] != 0 || registers_[kTextureFormat] != 3 ||
             (registers_[kTextureFilter] != 0 && registers_[kTextureFilter] != 0x101) ||
-            registers_[kTextureWrap] != 0x101 ||
-            (registers_[kTextureFunction] != 3 && registers_[kTextureFunction] != 0x103))
+            registers_[kTextureWrap] != 0x101 || (function & ~0x10103U) != 0 ||
+            ((function & 3) != 0 && (function & 3) != 3))
         {
-            throw std::runtime_error("GE supports non-swizzled RGBA8888 replacement textures with matching nearest or "
-                                     "linear filters and clamp addressing");
+            throw std::runtime_error("GE supports non-swizzled RGBA8888 MODULATE/REPLACE textures with matching "
+                                     "nearest or linear filters and clamp addressing");
         }
         const auto size = registers_[kTextureSize];
         if ((size & ~0x0F0FU) != 0 || (size & 15) > 10 || ((size >> 8) & 15) > 10)
@@ -460,7 +461,9 @@ void Ge::draw(std::uint32_t primitive)
                           .width = 1 << (size & 15),
                           .height = 1 << ((size >> 8) & 15),
                           .filter = registers_[kTextureFilter] == 0 ? TextureFilter::Nearest : TextureFilter::Linear,
-                          .use_alpha = (registers_[kTextureFunction] & 0x100U) != 0};
+                          .use_alpha = (function & 0x100U) != 0,
+                          .function = (function & 3) == 0 ? TextureFunction::Modulate : TextureFunction::Replace,
+                          .double_color = (function & 0x10000U) != 0};
         if (texture->stride < static_cast<std::uint32_t>(texture->width))
         {
             throw std::runtime_error("GE texture stride is too small");

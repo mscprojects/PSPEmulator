@@ -214,11 +214,29 @@ void draw_sprite(Memory &memory, const RenderTarget &target, const std::array<Ra
                 const auto vertical = static_cast<double>(y * 16 + 8 - first.y) / (second.y - first.y);
                 const auto u = first.u + (static_cast<double>(second.u) - first.u) * (rotated ? vertical : horizontal);
                 const auto v = first.v + (static_cast<double>(second.v) - first.v) * (rotated ? horizontal : vertical);
-                color = sample_texture(memory, *texture, u, v);
-                if (!texture->use_alpha)
+                const auto sampled = sample_texture(memory, *texture, u, v);
+                color = 0;
+                for (unsigned shift = 0; shift < 24; shift += 8)
                 {
-                    color = (color & 0xFFFFFFU) | (second.color & 0xFF000000U);
+                    auto channel = ((sampled >> shift) & 255) * (texture->double_color ? 2U : 1U);
+                    if (texture->function == TextureFunction::Modulate)
+                    {
+                        // Texture multiplication uses a vertex-color bias, unlike framebuffer blending.
+                        // Double before truncation so half * half * 2 yields 127, not 126.
+                        channel = (channel * (((second.color >> shift) & 255) + 1)) >> 8;
+                    }
+                    color |= std::min(channel, 255U) << shift;
                 }
+                auto alpha = second.color >> 24;
+                if (texture->use_alpha)
+                {
+                    alpha = sampled >> 24;
+                    if (texture->function == TextureFunction::Modulate)
+                    {
+                        alpha = (alpha * ((second.color >> 24) + 1)) >> 8;
+                    }
+                }
+                color |= alpha << 24;
             }
             const auto address = pixel_address(target, x, y);
             const auto destination = memory.read_u32(address);

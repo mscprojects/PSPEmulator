@@ -195,6 +195,31 @@ TEST_F(RasterizerTest, GivenPaddedTexture_WhenLinearSpriteMagnifies_ThenBlendsTe
     EXPECT_EQ(pixel(0, 4), 0U);
 }
 
+TEST_F(RasterizerTest, GivenLinearModulateTexture_WhenDrawingSprite_ThenFiltersBeforeModulatingEachChannel)
+{
+    memory.write_u32(GuestAddress{0x04100000}, 0x01030101);
+    memory.write_u32(GuestAddress{0x04100004}, 0x03010303);
+    memory.write_u32(GuestAddress{0x04000000}, 0x44000000);
+    const RasterTexture texture{.address = GuestAddress{0x04100000},
+                                .stride = 2,
+                                .width = 2,
+                                .height = 1,
+                                .filter = TextureFilter::Linear,
+                                .function = TextureFunction::Modulate};
+    draw_sprite(memory, target, {{{0, 0, 0xFFFFFFFF, 1, 0.5F}, {16, 16, 0x7F7F7F7F, 1, 0.5F}}}, texture);
+    // Filtering 1 and 3 first produces 2, then modulation produces 1.
+    // Modulating the taps first would produce 0 and 1, whose average truncates to 0.
+    EXPECT_EQ(pixel(0, 0), 0x44010101U);
+    EXPECT_EQ(pixel(1, 0), 0U);
+    // Expose the filtered, modulated alpha through a white destination scaled by source alpha.
+    memory.write_u32(GuestAddress{0x04000000}, 0xFFFFFFFF);
+    const SpriteOperations operations{.blend = RasterBlend{.operation = BlendOperation::Add,
+                                                           .source_factor = BlendFactor::Fixed,
+                                                           .destination_factor = BlendFactor::SourceAlpha}};
+    draw_sprite(memory, target, {{{0, 0, 0xFFFFFFFF, 1, 0.5F}, {16, 16, 0x7F7F7F7F, 1, 0.5F}}}, texture, operations);
+    EXPECT_EQ(pixel(0, 0), 0xFF010101U);
+}
+
 TEST_F(RasterizerTest, GivenFixedBlendFactors_WhenDrawingSprite_ThenWeightsEachRgbChannelIndependently)
 {
     memory.write_u32(GuestAddress{0x04000000}, 0x50604020);

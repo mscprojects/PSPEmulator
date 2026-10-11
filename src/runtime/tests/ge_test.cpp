@@ -4,6 +4,9 @@
 #include <gtest/gtest.h>
 
 #include <bit>
+#include <charconv>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <vector>
@@ -417,6 +420,90 @@ TEST_F(GeTest, GivenReplacementTexture_WhenAlphaBlending_ThenRgbaUsesTexelAlphaA
     }
 }
 
+TEST_F(GeTest, GivenModulateHardwareCases_WhenDrawing2DSprites_ThenEveryMeasuredPixelMatches)
+{
+    struct Case
+    {
+        std::uint32_t texture_color;
+        std::uint32_t vertex_color;
+        std::uint32_t function;
+        bool alpha_to_rgb;
+    };
+    // Inputs and order from gpu/texfunc/modulate.cpp. Its original PRX uses 3D transforms;
+    // replay the fragment measurements with a constant 1x1 texture on a through-mode sprite.
+    std::vector<Case> cases{
+        {0xFFFFFFFF, 0xFFFFFFFF, 0x100, false},   {0xFFFFFFFF, 0x00000000, 0x100, false},
+        {0x00000000, 0xFFFFFFFF, 0x100, false},   {0x7F7F7F7F, 0x7F7F7F7F, 0x100, false},
+        {0x7F7F7F7F, 0x3F3F3F3F, 0x100, false},   {0x7F7F7F7F, 0x3F3F3F3F, 0, false},
+        {0x7F7F7F7F, 0x7F7F7F7F, 0x10100, false}, {0xFFFFFFFF, 0x7F7F7F7F, 0x10100, false},
+        {0x7F7F7F7F, 0xFFFFFFFF, 0x10100, false}, {0x3F3F3F3F, 0x7F7F7F7F, 0x10100, false},
+        {0x7F000000, 0x7F000000, 0x100, true},    {0x7F000000, 0x7F000000, 0x10100, true},
+        {0x7F7F7F7F, 0x7F7F7F7F, 0, true},        {0x7F7F7F7F, 0x7F7F7F7F, 0x10000, true},
+    };
+    for (std::uint32_t value = 0; value < 256; ++value)
+    {
+        cases.push_back({(value << 24) | 0x00FF0000U | (value << 8) | value, 0x7F7F7F7F, 0x100, false});
+    }
+    const auto path = std::filesystem::path{PSPAUTOTESTS_ROOT} / "tests" / "gpu" / "texfunc" / "modulate.expected";
+    std::ifstream expected_file(path);
+    ASSERT_TRUE(expected_file.is_open());
+    for (const auto &input : cases)
+    {
+        std::string line;
+        while (std::getline(expected_file, line) && !line.starts_with("[r]"))
+        {
+        }
+        ASSERT_TRUE(line.starts_with("[r]"));
+        SCOPED_TRACE(line);
+        const auto marker = line.find("COLOR=");
+        ASSERT_NE(marker, std::string::npos);
+        std::uint32_t expected = 0;
+        const auto parsed = std::from_chars(line.data() + marker + 6, line.data() + line.size(), expected, 16);
+        ASSERT_EQ(parsed.ec, std::errc{});
+        ASSERT_EQ(parsed.ptr, line.data() + line.size());
+
+        memory.write_u32(GuestAddress{0x08004000}, input.texture_color);
+        memory.write_u32(GuestAddress{0x04000000}, input.alpha_to_rgb ? 0xFFFFFFFFU : 0x44444444U);
+        textured_vertex(0, {0, 0, input.vertex_color, 0, 0});
+        textured_vertex(1, {16, 16, input.vertex_color, 0, 0});
+        auto words = textured_drawing();
+        words.insert(words.end(), {0xB8000000, 0xA8080001, 0xC9000000 | input.function,
+                                   input.alpha_to_rgb ? 0x21000001U : 0x21000000U, 0xDF00002A, 0xE0000000, 0x04060002,
+                                   0x0F000000, 0x0C000000});
+        Ge probe(memory, kernel, 100);
+        for (std::size_t index = 0; index < words.size(); ++index)
+            memory.write_u32(GuestAddress{0x08001000 + static_cast<std::uint32_t>(index * 4)}, words[index]);
+        probe.enqueue({GuestAddress{0x08001000}, GuestAddress{0}, 0xFFFFFFFF, GuestAddress{0}});
+        while (probe.runnable())
+            probe.step();
+        EXPECT_EQ(pixel(0, 0), expected);
+        EXPECT_EQ(pixel(1, 0), 0U);
+    }
+    // Do not silently skip hardware cases added to the expected file.
+    for (std::string line; std::getline(expected_file, line);)
+        EXPECT_FALSE(line.starts_with("[r]"));
+}
+
+TEST_F(GeTest, GivenTextureFunctionChanges_WhenDrawingSuccessiveSprites_ThenUsesCurrentFunctionAndDoubling)
+{
+    memory.write_u32(GuestAddress{0x08004000}, 0x804020FF);
+    for (unsigned index = 0; index < 3; ++index)
+    {
+        memory.write_u32(GuestAddress{0x04000000 + index * 4}, 0x44000000);
+        textured_vertex(index * 2, {static_cast<std::int32_t>(index * 16), 0, 0xFFFFFFFF, 0, 0});
+        textured_vertex(index * 2 + 1, {static_cast<std::int32_t>((index + 1) * 16), 16, 0x7F3F7F00, 0, 0});
+    }
+    auto words = textured_drawing();
+    words.insert(words.end(),
+                 {0xC9000100, 0x04060002, 0xC9010003, 0x04060002, 0xC9010100, 0x04060002, 0x0F000000, 0x0C000000});
+    submit(words);
+    drain();
+    EXPECT_EQ(pixel(0, 0), 0x44101000U);
+    EXPECT_EQ(pixel(1, 0), 0x448040FFU);
+    EXPECT_EQ(pixel(2, 0), 0x44202001U);
+    EXPECT_EQ(pixel(3, 0), 0U);
+}
+
 TEST_F(GeTest, GivenClearWithBlendingAndStencilEnabled_WhenDrawing_ThenBypassesBlendAndStencilOperations)
 {
     vertex(0, 0, 0, 0);
@@ -460,9 +547,10 @@ TEST_F(GeTest, GivenInvalidTextureStateOrCoordinates_WhenDrawing_ThenFailsBefore
     textured_vertex(0, {0, 0, 0, 0, 0});
     textured_vertex(1, {32, 32, 0, 2, 2});
     const auto original = memory.read_bytes(GuestAddress{0x04000000}, 0x200000);
-    for (const auto bad : {0xA00FFFF0U, 0xA8080001U, 0xB8000B01U, 0xC2000001U, 0xC2000100U, 0xC2010000U, 0xC3000002U,
-                           0xC6000001U, 0xC6000100U, 0xC6000004U, 0xC6000105U, 0xC6000202U, 0xC6010101U, 0xC7000000U,
-                           0xC9000000U, 0xC9010103U, 0x15000001U, 0x23000001U, 0x1E000000U, 0x0103FFE0U})
+    for (const auto bad :
+         {0xA00FFFF0U, 0xA8080001U, 0xB8000B01U, 0xC2000001U, 0xC2000100U, 0xC2010000U, 0xC3000002U, 0xC6000001U,
+          0xC6000100U, 0xC6000004U, 0xC6000105U, 0xC6000202U, 0xC6010101U, 0xC7000000U, 0xC9000001U, 0xC9000002U,
+          0xC9000004U, 0xC9000200U, 0xC9020103U, 0x15000001U, 0x23000001U, 0x1E000000U, 0x0103FFE0U})
     {
         SCOPED_TRACE(bad);
         for (const auto filter : {0U, 0x101U})
