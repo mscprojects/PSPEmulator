@@ -49,7 +49,7 @@ TEST(KernelTest, ThreadSelectionPreservesSeparateCpuStatesAndReturnStatus)
     EXPECT_EQ(kernel.exit_code(), 7);
 }
 
-TEST(KernelTest, TerminationCancelsReadyAndTimedWaitsAndRestartResetsCpuState)
+TEST(KernelTest, WhenThreadTerminatesAndRestarts_ThenCancelsReadyAndTimedWaitsAndResetsCpuState)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -102,7 +102,7 @@ TEST(KernelTest, TerminationCancelsReadyAndTimedWaitsAndRestartResetsCpuState)
     EXPECT_EQ(memory.read_u32(GuestAddress{kernel.current_thread_state().registers[5]}), 0x12345678U);
 }
 
-TEST(KernelTest, RestartAfterExitingACallbackDiscardsItsSavedContinuation)
+TEST(KernelTest, GivenThreadExitedDuringCallback_WhenRestarted_ThenDiscardsSavedContinuation)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -133,7 +133,7 @@ TEST(KernelTest, RestartAfterExitingACallbackDiscardsItsSavedContinuation)
     EXPECT_EQ(kernel.current_thread_state(), restarted);
 }
 
-TEST(KernelTest, DelayedThreadResumesAfterAnotherThreadExits)
+TEST(KernelTest, GivenDelayedThread_WhenAnotherThreadExitsAndDeadlineElapses_ThenResumes)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -275,7 +275,7 @@ TEST(KernelTest, WakeupsFollowDeadlinesAndEqualDeadlinesPreserveDelayOrder)
     EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Finished);
 }
 
-TEST(KernelTest, ElapsedDelayDoesNotPreemptAnEqualPriorityRunningThread)
+TEST(KernelTest, GivenEqualPriorityRunningThread_WhenDelayElapses_ThenRunningThreadKeepsCpu)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -380,7 +380,7 @@ TEST(KernelTest, VblankInterruptsFollowLcdCadenceWithoutRoundingDrift)
     EXPECT_FALSE(kernel.deliver_pending_interrupt());
 }
 
-TEST(KernelTest, InterruptMakesStoreConditionalFailAndLoadLinkedCanRearmIt)
+TEST(KernelTest, GivenLoadLinked_WhenInterrupted_ThenStoreConditionalFailsUntilRearmed)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -413,7 +413,7 @@ TEST(KernelTest, InterruptMakesStoreConditionalFailAndLoadLinkedCanRearmIt)
     EXPECT_EQ(memory.read_u32(GuestAddress{0x1000}), 0xBBBBBBBBU);
 }
 
-TEST(KernelTest, InterruptPreservesBranchAndReturnDelaySlotsAndAllRegisters)
+TEST(KernelTest, WhenInterrupted_ThenPreservesBranchAndReturnDelaySlotsAndAllRegisters)
 {
     for (const auto branch : {0x10000003U, 0x50000003U, 0x00200008U}) // BEQ, BEQL, JR
     {
@@ -456,7 +456,7 @@ TEST(KernelTest, InterruptPreservesBranchAndReturnDelaySlotsAndAllRegisters)
     }
 }
 
-TEST(KernelTest, MaskedInterruptsStayPendingUntilTheOuterSuspendIsResumed)
+TEST(KernelTest, GivenNestedInterruptSuspension_WhenOuterSuspendResumes_ThenPendingInterruptCanBeDelivered)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -487,7 +487,7 @@ TEST(KernelTest, MaskedInterruptsStayPendingUntilTheOuterSuspendIsResumed)
     EXPECT_FALSE(kernel.interrupts_enabled());
 }
 
-TEST(KernelTest, IdleTimeSchedulesInterruptsWithoutChangingWaitingThreadState)
+TEST(KernelTest, GivenWaitingThread_WhenIdleTimeAdvances_ThenSchedulesInterruptsAndPreservesThreadState)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -539,7 +539,7 @@ TEST(KernelTest, ObjectIdentifiersAreSharedAcrossThreadsPartitionsAndSynchroniza
     EXPECT_THROW(partitions.address(semaphore), std::out_of_range);
 }
 
-TEST(KernelTest, ThreadStackUsesAFreedPartitionRangeWithoutOverlappingLiveBlocks)
+TEST(KernelTest, GivenFreedPartitionRange_WhenThreadStackAllocated_ThenReusesRangeWithoutOverlappingLiveBlocks)
 {
     Memory memory(GuestAddress{0x1000}, 2304);
     std::uint32_t next_id{1};
@@ -567,7 +567,7 @@ TEST(KernelTest, ThreadStackUsesAFreedPartitionRangeWithoutOverlappingLiveBlocks
     EXPECT_EQ(memory.read_u32(high_address), 0xABCDEF00U);
 }
 
-TEST(KernelTest, WaitingThreadKeepsItsStateAcrossVblanksUntilItsWakeup)
+TEST(KernelTest, GivenWaitingThread_WhenVblankOccurs_ThenPreservesStateUntilWakeup)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -600,7 +600,7 @@ TEST(KernelTest, WaitingThreadKeepsItsStateAcrossVblanksUntilItsWakeup)
     EXPECT_THROW(kernel.next_vblank_time(), std::overflow_error);
 }
 
-TEST(KernelTest, HigherPriorityReadyThreadsPreemptAtBoundariesAndResumeSavedThreads)
+TEST(KernelTest, GivenHigherPriorityReadyThread_WhenScheduled_ThenPreemptsAtBoundaryAndResumesSavedThread)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -648,7 +648,7 @@ TEST(KernelTest, HigherPriorityReadyThreadsPreemptAtBoundariesAndResumeSavedThre
     EXPECT_EQ(kernel.select_next_thread(), ThreadSelection::Finished);
 }
 
-TEST(KernelTest, ExitCallbackRunsOnOwnerAndRestoresCpuStateWithoutEndingSleep)
+TEST(KernelTest, GivenSleepingCallbackOwner_WhenExitRequested_ThenRunsCallbackAndRestoresSleepingState)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -843,7 +843,7 @@ TEST(KernelTest, GeInterruptPreservesIdleWaitAndCompletionsDuringItsExecution)
     }
 }
 
-TEST(KernelTest, GeInterruptDefersHigherPriorityThreadsUntilItsReturn)
+TEST(KernelTest, GivenGeInterrupt_WhenHigherPriorityThreadBecomesReady_ThenDefersPreemptionUntilReturn)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -868,7 +868,7 @@ TEST(KernelTest, GeInterruptDefersHigherPriorityThreadsUntilItsReturn)
     EXPECT_EQ(kernel.current_thread_id(), main);
 }
 
-TEST(KernelTest, GeInterruptUsesAWaitingThreadAfterTheLastRunningThreadExits)
+TEST(KernelTest, GivenWaitingThread_WhenLastRunningThreadExits_ThenGeInterruptUsesWaitingThread)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -894,7 +894,7 @@ TEST(KernelTest, GeInterruptUsesAWaitingThreadAfterTheLastRunningThreadExits)
     EXPECT_EQ(state.registers[2], 0U);
 }
 
-TEST(KernelTest, GeInterruptDefersWhileAnExitCallbackWaitsAndAllowsTimeToAdvance)
+TEST(KernelTest, GivenWaitingExitCallback_WhenGeInterruptPending_ThenDefersDeliveryAndAllowsTimeToAdvance)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -920,7 +920,7 @@ TEST(KernelTest, GeInterruptDefersWhileAnExitCallbackWaitsAndAllowsTimeToAdvance
     EXPECT_TRUE(kernel.enter_interrupt_callback(GuestAddress{0x900}, 7, GuestAddress{0}));
 }
 
-TEST(KernelTest, VblankWaitTargetsTheNextEdge)
+TEST(KernelTest, WhenWaitingForVblank_ThenTargetsNextEdge)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};

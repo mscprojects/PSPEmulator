@@ -94,7 +94,7 @@ protected:
     Ge ge;
 };
 
-TEST_F(GeTest, StalledFifoListsResumeAtUpdatedAddressAndReuseCompletedSlots)
+TEST_F(GeTest, GivenStalledFifoLists_WhenStallAddressUpdated_ThenResumeAndReuseCompletedSlots)
 {
     const auto first = submit({0, 0x0F000000, 0x0C000000}, 0x08001000, 0x08001000);
     const auto second = submit({0x0F000000, 0x0C000000}, 0x08001100);
@@ -119,7 +119,7 @@ TEST_F(GeTest, StalledFifoListsResumeAtUpdatedAddressAndReuseCompletedSlots)
     EXPECT_THROW(ge.update_stall(second, GuestAddress{0}), std::runtime_error);
 }
 
-TEST_F(GeTest, ListSyncWakesItsThreadOnlyAtEndAndDrawSyncWaitsForEveryList)
+TEST_F(GeTest, WhenWaitingForListAndDrawSync_ThenWakesAtListEndAndAfterAllListsComplete)
 {
     const auto first = submit({0x0F000000, 0x0C000000});
     submit({0x0F000000, 0x0C000000}, 0x08001100, 0x08001100);
@@ -238,7 +238,7 @@ TEST_F(GeTest, JumpSkipsInlineDataAndDiagnosticsIdentifyBadCommandAndAddress)
     }
 }
 
-TEST_F(GeTest, CyclicJumpIsBoundedEvenWithAllCpuThreadsWaiting)
+TEST_F(GeTest, GivenAllCpuThreadsWaiting_WhenGeJumpCycles_ThenCommandBudgetBoundsExecution)
 {
     Ge bounded(memory, kernel, 3);
     memory.write_u32(GuestAddress{0x08001000}, 0x10080000);
@@ -297,7 +297,7 @@ TEST_F(GeTest, ClearClipsToRegionAndScissorAndRgbPreservesAlpha)
     }
 }
 
-TEST_F(GeTest, UnsupportedDrawingStateFailsBeforeWritingVram)
+TEST_F(GeTest, GivenUnsupportedDrawingState_WhenDrawing_ThenFailsBeforeWritingVram)
 {
     vertex(0, 0, 0, 1);
     vertex(1, 4, 0, 2);
@@ -330,7 +330,7 @@ TEST_F(GeTest, UnsupportedDrawingStateFailsBeforeWritingVram)
     }
 }
 
-TEST_F(GeTest, TexturedSpritesDecodeAliasedAddressAndAdvanceVertexPointerAcrossPrimitives)
+TEST_F(GeTest, GivenAliasedTexture_WhenDrawingSuccessiveSprites_ThenSamplesTextureAndAdvancesVertexPointer)
 {
     memory.write_u32(GuestAddress{0x08004000}, 0xFFFFFFFF);
     memory.write_u32(GuestAddress{0x08004004}, 0xFF000000);
@@ -354,7 +354,7 @@ TEST_F(GeTest, TexturedSpritesDecodeAliasedAddressAndAdvanceVertexPointerAcrossP
     EXPECT_EQ(pixel(4, 0), 0U);
 }
 
-TEST_F(GeTest, InvalidTextureStateAndCoordinatesFailBeforeAnyPixelWrite)
+TEST_F(GeTest, GivenInvalidTextureStateOrCoordinates_WhenDrawing_ThenFailsBeforeAnyPixelWrite)
 {
     textured_vertex(0, {0, 0, 0, 0, 0});
     textured_vertex(1, {32, 32, 0, 2, 2});
@@ -439,7 +439,7 @@ TEST_F(GeTest, ListFetchAndJumpValidateMappedMemoryAndReportFaultingPc)
     }
 }
 
-TEST_F(GeTest, InvalidFloatCoordinatesFailBeforeAnyPixelWrite)
+TEST_F(GeTest, GivenInvalidFloatCoordinates_WhenDrawing_ThenFailsBeforeAnyPixelWrite)
 {
     for (const auto invalid :
          {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), 65536.0F})

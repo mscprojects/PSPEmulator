@@ -7,7 +7,7 @@
 namespace psp::detail
 {
 
-TEST(SynchronizationTest, WrongMutexOwnerCannotChangeGuestWorkArea)
+TEST(SynchronizationTest, GivenWrongMutexOwner_WhenUnlocking_ThenGuestWorkAreaIsUnchanged)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};

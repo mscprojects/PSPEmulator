@@ -8,7 +8,7 @@
 namespace psp::detail
 {
 
-TEST(ControllerTest, BlockingReadYieldsAndResumesOnlyAtGuestSampleWithExactLayout)
+TEST(ControllerTest, GivenBlockingRead_WhenGuestSampleArrives_ThenResumesWithExactLayout)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -41,7 +41,7 @@ TEST(ControllerTest, BlockingReadYieldsAndResumesOnlyAtGuestSampleWithExactLayou
     EXPECT_FALSE(controller.read_positive(GuestAddress{0x800}, 1)); // Already consumed.
 }
 
-TEST(ControllerTest, DigitalSamplesAreNeutralAndUnconsumedSamplesUseLatestGuestTimestamp)
+TEST(ControllerTest, GivenDigitalMode_WhenSamplesRemainUnconsumed_ThenReadsLatestTimestampAndNeutralAnalogValues)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -62,7 +62,7 @@ TEST(ControllerTest, DigitalSamplesAreNeutralAndUnconsumedSamplesUseLatestGuestT
     EXPECT_EQ(controller.set_sampling_mode(0), 1U);
 }
 
-TEST(ControllerTest, InvalidReadDoesNotConsumeSampleOrBlockCaller)
+TEST(ControllerTest, GivenAvailableSample_WhenReadIsInvalid_ThenPreservesSampleAndRunningCaller)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};
@@ -82,7 +82,7 @@ TEST(ControllerTest, InvalidReadDoesNotConsumeSampleOrBlockCaller)
     EXPECT_EQ(controller.read_positive(GuestAddress{0x800}, 1), 1U);
 }
 
-TEST(ControllerTest, MultipleReadersReceiveDistinctSamplesInFifoOrder)
+TEST(ControllerTest, GivenMultipleReaders_WhenSamplesArrive_ThenReceiveDistinctSamplesInFifoOrder)
 {
     Memory memory(GuestAddress{0}, 0x40000);
     std::uint32_t next_id{1};

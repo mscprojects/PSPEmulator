@@ -39,7 +39,7 @@ TEST(DisplayTest, CapturesRgbaWithOpaqueAlphaAndGuestStrideThroughVramAlias)
     EXPECT_EQ(display.pixels()[0], 0);
 }
 
-TEST(DisplayTest, NextFrameSelectionActivatesOnlyAtVblankAndNullDisablesIt)
+TEST(DisplayTest, GivenNextFrameSelection_WhenVblankOccurs_ThenActivatesFramebufferOrDisablesNullSelection)
 {
     Memory memory(GuestAddress{0x04000000}, 0x200000);
     Display display(memory);
@@ -66,7 +66,7 @@ TEST(DisplayTest, NextFrameSelectionActivatesOnlyAtVblankAndNullDisablesIt)
     EXPECT_EQ(display.pixels()[3], 255);
 }
 
-TEST(DisplayTest, LatestSelectionWinsAndImmediateSelectionCancelsPendingChange)
+TEST(DisplayTest, GivenPendingFramebuffer_WhenSelectionChanges_ThenLatestWinsAndImmediateSelectionCancelsPendingChange)
 {
     Memory memory(GuestAddress{0x04000000}, 0x200000);
     Display display(memory);
@@ -84,7 +84,7 @@ TEST(DisplayTest, LatestSelectionWinsAndImmediateSelectionCancelsPendingChange)
     EXPECT_EQ(display.pixels()[0], 0x11);
 }
 
-TEST(DisplayTest, RejectsUnsupportedModesAndInvalidFramebufferRangesWithoutReplacingSelection)
+TEST(DisplayTest, GivenSelectedFramebuffer_WhenModeOrRangeIsInvalid_ThenRejectsChangeAndPreservesSelection)
 {
     Memory memory(GuestAddress{0x04000000}, 0x200000);
     Display display(memory);

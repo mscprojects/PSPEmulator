@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
@@ -14,6 +15,8 @@
 
 namespace psp
 {
+
+namespace fs = std::filesystem;
 
 using test::PrxFixture;
 
@@ -31,7 +34,7 @@ constexpr std::size_t kMemorySize = 0x1000;
 
 } // namespace
 
-TEST(PrxTest, PreparesIndependentImagesFromOneParsedPrx)
+TEST(PrxTest, GivenOneParsedPrx_WhenPreparedTwice_ThenImagesAreIndependent)
 {
     const PrxFixture fixture;
     const Payload original_bytes = fixture.bytes;
@@ -61,7 +64,7 @@ TEST(PrxTest, LoadedImageUsesThePspMemoryLayoutAndRejectsInvalidRamPlacement)
     EXPECT_THROW(prepare_prx(read_prx(fixture.bytes), GuestAddress{0x04000000}, 0x1000), std::invalid_argument);
 }
 
-TEST(PrxTest, PreparesAfterSourcePayloadIsDestroyed)
+TEST(PrxTest, GivenDestroyedSourcePayload_WhenPreparingParsedPrx_ThenImageLoads)
 {
     const auto parsed = []
     {
@@ -148,7 +151,7 @@ TEST(PrxTest, RelocatesWordsJumpsAndSignedHighLowPairs)
     EXPECT_EQ(loaded.memory.read_u32(GuestAddress{base + 0x28}), 0x12345678U);
 }
 
-TEST(PrxTest, RelocatesAcrossMultipleSegmentsAndLeavesTheirGapZeroed)
+TEST(PrxTest, GivenMultipleSegments_WhenRelocated_ThenSegmentGapRemainsZeroed)
 {
     PrxFixture fixture;
     fixture.halfword(44, 2);
@@ -195,7 +198,7 @@ TEST(PrxTest, RejectsOverlappingSegmentsAndMisalignedLoadBases)
     EXPECT_NO_THROW(prepare_prx(read_prx(aligned.bytes), GuestAddress{kLoadAddress + 0x100}, kMemorySize));
 }
 
-TEST(PrxTest, LoadsRelocationsFromProgramHeadersWithoutSections)
+TEST(PrxTest, GivenNoSections_WhenLoading_ThenUsesProgramHeaderRelocations)
 {
     PrxFixture fixture;
     fixture.word(32, 0);
@@ -328,9 +331,9 @@ TEST(PrxTest, RejectsMalformedModuleAndImportPointers)
                  std::invalid_argument);
 }
 
-TEST(PrxTest, LoadsBundledLsuWithGlobalPointerBeyondItsImage)
+TEST(PrxTest, GivenBundledLsu_WhenLoaded_ThenPreservesGlobalPointerBeyondImage)
 {
-    std::ifstream input(std::string(PSPAUTOTESTS_ROOT) + "/tests/cpu/lsu/lsu.prx", std::ios::binary);
+    std::ifstream input(fs::path{PSPAUTOTESTS_ROOT} / "tests" / "cpu" / "lsu" / "lsu.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
     const Payload bytes{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     const auto parsed = read_prx(bytes);
@@ -354,9 +357,9 @@ TEST(PrxTest, LoadsBundledLsuWithGlobalPointerBeyondItsImage)
     }
 }
 
-TEST(PrxTest, LoadsBundledCpuAluAtDifferentAddresses)
+TEST(PrxTest, GivenBundledCpuAlu_WhenLoadedAtDifferentAddresses_ThenRelocatesModuleAndImports)
 {
-    std::ifstream input(std::string(PSPAUTOTESTS_ROOT) + "/tests/cpu/cpu_alu/cpu_alu.prx", std::ios::binary);
+    std::ifstream input(fs::path{PSPAUTOTESTS_ROOT} / "tests" / "cpu" / "cpu_alu" / "cpu_alu.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
     const Payload bytes{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     const auto parsed = read_prx(bytes);

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
@@ -17,6 +18,8 @@
 
 namespace psp
 {
+
+namespace fs = std::filesystem;
 
 namespace
 {
@@ -133,11 +136,11 @@ class CpuPrxExecutionTest : public testing::TestWithParam<const char *>
 {
 };
 
-TEST_P(CpuPrxExecutionTest, MatchesEntireHardwareOutput)
+TEST_P(CpuPrxExecutionTest, WhenRunAtDifferentLoadAddresses_ThenEntireOutputMatchesHardware)
 {
-    const std::string directory = std::string(PSPAUTOTESTS_ROOT) + "/tests/cpu/";
-    std::ifstream input(directory + GetParam() + ".prx", std::ios::binary);
-    std::ifstream expected_file(directory + GetParam() + ".expected", std::ios::binary);
+    const auto directory = fs::path{PSPAUTOTESTS_ROOT} / "tests" / "cpu";
+    std::ifstream input(directory / (std::string{GetParam()} + ".prx"), std::ios::binary);
+    std::ifstream expected_file(directory / (std::string{GetParam()} + ".expected"), std::ios::binary);
     ASSERT_TRUE(input.is_open());
     ASSERT_TRUE(expected_file.is_open());
     const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
@@ -161,11 +164,11 @@ INSTANTIATE_TEST_SUITE_P(BundledCpu, CpuPrxExecutionTest,
                                          "fpu/fpu_branch_hazard", "fpu/fpu", "fpu/roundmode", "fpu/rounding",
                                          "fpu/fpu_nan", "fpu/fcr"));
 
-TEST(ExecutionTest, BundledLsuMatchesHardwareOutputAtDifferentAddresses)
+TEST(ExecutionTest, GivenBundledLsu_WhenRunAtDifferentLoadAddresses_ThenOutputMatchesHardware)
 {
-    const std::string directory = std::string(PSPAUTOTESTS_ROOT) + "/tests/cpu/lsu/";
-    std::ifstream input(directory + "lsu.prx", std::ios::binary);
-    std::ifstream expected_file(directory + "lsu.expected", std::ios::binary);
+    const auto directory = fs::path{PSPAUTOTESTS_ROOT} / "tests" / "cpu" / "lsu";
+    std::ifstream input(directory / "lsu.prx", std::ios::binary);
+    std::ifstream expected_file(directory / "lsu.expected", std::ios::binary);
     ASSERT_TRUE(input.is_open());
     ASSERT_TRUE(expected_file.is_open());
     const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
@@ -186,11 +189,11 @@ TEST(ExecutionTest, BundledLsuMatchesHardwareOutputAtDifferentAddresses)
     }
 }
 
-TEST(ExecutionTest, BundledLlscMatchesEntireHardwareOutputAtDifferentAddresses)
+TEST(ExecutionTest, GivenBundledLlsc_WhenRunAtDifferentLoadAddresses_ThenEntireOutputMatchesHardware)
 {
-    const std::string directory = std::string(PSPAUTOTESTS_ROOT) + "/tests/cpu/lsu/";
-    std::ifstream input(directory + "llsc.prx", std::ios::binary);
-    std::ifstream expected_file(directory + "llsc.expected", std::ios::binary);
+    const auto directory = fs::path{PSPAUTOTESTS_ROOT} / "tests" / "cpu" / "lsu";
+    std::ifstream input(directory / "llsc.prx", std::ios::binary);
+    std::ifstream expected_file(directory / "llsc.expected", std::ios::binary);
     ASSERT_TRUE(input.is_open());
     ASSERT_TRUE(expected_file.is_open());
     const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
@@ -209,11 +212,11 @@ TEST(ExecutionTest, BundledLlscMatchesEntireHardwareOutputAtDifferentAddresses)
     }
 }
 
-TEST(ExecutionTest, NearestSpritesMatchEntireHardwareOutputAtDifferentAddresses)
+TEST(ExecutionTest, GivenNearestSpritePrx_WhenRunAtDifferentLoadAddresses_ThenEntireOutputMatchesHardware)
 {
-    const std::string path = std::string(PSPAUTOTESTS_ROOT) + "/tests/gpu/filtering/precisionnearest2d";
-    std::ifstream input(path + ".prx", std::ios::binary);
-    std::ifstream expected_file(path + ".expected", std::ios::binary);
+    const auto directory = fs::path{PSPAUTOTESTS_ROOT} / "tests" / "gpu" / "filtering";
+    std::ifstream input(directory / "precisionnearest2d.prx", std::ios::binary);
+    std::ifstream expected_file(directory / "precisionnearest2d.expected", std::ios::binary);
     ASSERT_TRUE(input.is_open());
     ASSERT_TRUE(expected_file.is_open());
     const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
@@ -232,9 +235,9 @@ TEST(ExecutionTest, NearestSpritesMatchEntireHardwareOutputAtDifferentAddresses)
     }
 }
 
-TEST(ExecutionTest, HelloWorldPrintsAndExitsAtDifferentAddresses)
+TEST(ExecutionTest, GivenHelloWorld_WhenRunAtDifferentLoadAddresses_ThenPrintsAndExits)
 {
-    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/hello_world.prx", std::ios::binary);
+    std::ifstream input(fs::path{PSPEMU_RUNTIME_FIXTURES_ROOT} / "hello_world.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
     const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     const auto parsed = read_prx(payload);
@@ -372,7 +375,7 @@ TEST(ExecutionTest, RejectsUnboundSyscallCodes)
     }
 }
 
-TEST(ExecutionTest, GuestDelayAdvancesBothTimeServicesAndReturnsSuccess)
+TEST(ExecutionTest, WhenGuestDelays_ThenBothTimeServicesAdvanceAndReturnSuccess)
 {
     ServicePrxFixture program("ThreadManForUser", {0x369ED59D, 0x82BC5777, 0xCEADEB47});
     program.call(0);
@@ -410,7 +413,7 @@ TEST(ExecutionTest, WideSystemTimeCarriesIntoV1AndLowTimeWraps)
     EXPECT_EQ(execute_prx(program.finish()).exit_code, 1);
 }
 
-TEST(ExecutionTest, DelayRunsAnotherGuestThreadAndResumesTheCaller)
+TEST(ExecutionTest, WhenGuestThreadDelays_ThenAnotherThreadRunsAndCallerResumes)
 {
     ServicePrxFixture program("ThreadManForUser", {0x446D8DE6, 0xF475845D, 0xCEADEB47});
     program.fixture.name(0x280, "worker");
@@ -559,7 +562,7 @@ TEST(ExecutionTest, ThreadStatusReportsStackSizeAndRejectsUnsupportedLayouts)
     EXPECT_THROW(execute_prx(read_prx(program.fixture.bytes)), std::runtime_error);
 }
 
-TEST(ExecutionTest, GuestStoresAndLoadsUseSharedVramAliases)
+TEST(ExecutionTest, WhenGuestStoresThroughVramAlias_ThenLoadsObserveSharedData)
 {
     test::PrxFixture fixture;
     fixture.word(0x100, 0x3C040400); // lui $a0, 0x0400: cached VRAM
@@ -571,7 +574,7 @@ TEST(ExecutionTest, GuestStoresAndLoadsUseSharedVramAliases)
     EXPECT_EQ(execute_prx(read_prx(fixture.bytes)).exit_code, 0x55);
 }
 
-TEST(ExecutionTest, ReturnsGuestStatusAndCountsTheReturnDelaySlot)
+TEST(ExecutionTest, WhenGuestReturns_ThenReportsStatusAndCountsReturnDelaySlot)
 {
     test::PrxFixture fixture;
     fixture.word(0x100, 0x03E00008); // jr $ra
@@ -609,7 +612,7 @@ TEST(ExecutionTest, CapturesGuestConsoleWritesAndRejectsInvalidBuffers)
     EXPECT_THROW(execute_prx(read_prx(fixture.bytes)), std::runtime_error);
 }
 
-TEST(ExecutionTest, PassesStartupArgumentsAsNulSeparatedBytes)
+TEST(ExecutionTest, GivenStartupArguments_WhenGuestStarts_ThenReceivesNulSeparatedBytes)
 {
     test::PrxFixture fixture;
     fixture.word(0x180, 0xD0);
@@ -637,7 +640,7 @@ TEST(ExecutionTest, PassesStartupArgumentsAsNulSeparatedBytes)
     EXPECT_TRUE(execute_prx(parsed, options).output.empty());
 }
 
-TEST(ExecutionTest, EnforcesStartupArgumentStackCapacity)
+TEST(ExecutionTest, WhenStartupArgumentsExceedStackCapacity_ThenExecutionIsRejected)
 {
     test::PrxFixture fixture;
     fixture.word(0x100, 0x03E00008); // jr $ra
@@ -650,7 +653,7 @@ TEST(ExecutionTest, EnforcesStartupArgumentStackCapacity)
     EXPECT_THROW(execute_prx(parsed, options), std::invalid_argument);
 }
 
-TEST(ExecutionTest, StopsAnInfiniteLoopAtTheInstructionBudget)
+TEST(ExecutionTest, GivenInfiniteLoop_WhenInstructionBudgetIsExhausted_ThenReportsFaultingAddress)
 {
     test::PrxFixture fixture;
     fixture.word(0x100, 0x1000FFFF); // beq $zero, $zero, -1
@@ -669,7 +672,7 @@ TEST(ExecutionTest, StopsAnInfiniteLoopAtTheInstructionBudget)
     }
 }
 
-TEST(ExecutionTest, HeadlessRunRejectsAGuestThatOnlyHostInputCouldWake)
+TEST(ExecutionTest, GivenGuestWaitingForHostInput_WhenRunHeadless_ThenReportsBlockedGuest)
 {
     ServicePrxFixture program("ThreadManForUser", {0x82826F70});
     program.call(0); // sceKernelSleepThreadCB without any callback
@@ -691,7 +694,7 @@ TEST(ExecutionTest, HeadlessRunRejectsAGuestThatOnlyHostInputCouldWake)
     }
 }
 
-TEST(ExecutionTest, ReportsCpuFaultsAndInvokedUnsupportedImports)
+TEST(ExecutionTest, WhenCpuFaultsOrUnsupportedImportsAreInvoked_ThenReportsFailureDetails)
 {
     test::PrxFixture fixture;
     fixture.word(0x100, 0xFFFFFFFF);
@@ -721,7 +724,7 @@ TEST(ExecutionTest, ReportsCpuFaultsAndInvokedUnsupportedImports)
     }
 }
 
-TEST(ExecutionTest, RejectsInvalidOptionsAndInsufficientRuntimeMemory)
+TEST(ExecutionTest, WhenOptionsAreInvalidOrRuntimeMemoryIsInsufficient_ThenExecutionIsRejected)
 {
     const test::PrxFixture fixture;
     const auto parsed = read_prx(fixture.bytes);
@@ -738,7 +741,7 @@ TEST(ExecutionTest, RejectsInvalidOptionsAndInsufficientRuntimeMemory)
     EXPECT_THROW(execute_prx(parsed, options), std::invalid_argument);
 }
 
-TEST(ExecutionTest, GeCycleDuringBlockingListSyncYieldsAtVblankAndExhaustsItsOwnBudget)
+TEST(ExecutionTest, GivenCyclicGeList_WhenGuestWaitsForListSync_ThenYieldsAtVblankAndExhaustsGeBudget)
 {
     ServicePrxFixture program("sceGe_user", {0xAB49E76A, 0x03444EB4});
     program.fixture.word(0x570, 0x10080000); // BASE
@@ -769,9 +772,10 @@ TEST(ExecutionTest, GeCycleDuringBlockingListSyncYieldsAtVblankAndExhaustsItsOwn
     }
 }
 
-TEST(ExecutionTest, TriangleRendersExpectedPixelsAndExitsThroughCallbacksAtDifferentAddresses)
+TEST(ExecutionTest,
+     GivenTriangleAtDifferentLoadAddresses_WhenExitRequested_ThenRendersExpectedPixelsAndExitsThroughCallbacks)
 {
-    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/triangle.prx", std::ios::binary);
+    std::ifstream input(fs::path{PSPEMU_RUNTIME_FIXTURES_ROOT} / "triangle.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
     const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     const auto parsed = read_prx(payload);
@@ -816,9 +820,9 @@ TEST(ExecutionTest, TriangleRendersExpectedPixelsAndExitsThroughCallbacksAtDiffe
     }
 }
 
-TEST(ExecutionTest, TriangleRetainsOverallCpuBudgetWhileWaitingForHome)
+TEST(ExecutionTest, GivenTriangleWaitingForHome_WhenCpuBudgetIsExhausted_ThenExecutionStops)
 {
-    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/triangle.prx", std::ios::binary);
+    std::ifstream input(fs::path{PSPEMU_RUNTIME_FIXTURES_ROOT} / "triangle.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
     const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     ExecutionOptions options;
@@ -842,9 +846,9 @@ TEST(ExecutionTest, TriangleRetainsOverallCpuBudgetWhileWaitingForHome)
     EXPECT_TRUE(rendered);
 }
 
-TEST(ExecutionTest, ScreenHelloWorldRendersExpectedPixelsAtDifferentAddresses)
+TEST(ExecutionTest, GivenScreenHelloWorld_WhenRunAtDifferentLoadAddresses_ThenRendersExpectedPixels)
 {
-    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/screen_hello_world.prx", std::ios::binary);
+    std::ifstream input(fs::path{PSPEMU_RUNTIME_FIXTURES_ROOT} / "screen_hello_world.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
     const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     const auto parsed = read_prx(payload);
@@ -892,9 +896,10 @@ TEST(ExecutionTest, ScreenHelloWorldRendersExpectedPixelsAtDifferentAddresses)
     }
 }
 
-TEST(ExecutionTest, ControllerShowsInputAndExitsThroughGuestCallbackAtDifferentAddresses)
+TEST(ExecutionTest,
+     GivenControllerAtDifferentLoadAddresses_WhenInputAndExitRequested_ThenShowsInputAndExitsThroughCallback)
 {
-    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/controller_basic.prx", std::ios::binary);
+    std::ifstream input(fs::path{PSPEMU_RUNTIME_FIXTURES_ROOT} / "controller_basic.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
     const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     const auto parsed = read_prx(payload);
@@ -956,9 +961,9 @@ TEST(ExecutionTest, ControllerShowsInputAndExitsThroughGuestCallbackAtDifferentA
     }
 }
 
-TEST(ExecutionTest, ControllerAcceptsExitRequestBeforeCallbackRegistration)
+TEST(ExecutionTest, GivenController_WhenExitRequestedBeforeCallbackRegistration_ThenGuestExits)
 {
-    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/controller_basic.prx", std::ios::binary);
+    std::ifstream input(fs::path{PSPEMU_RUNTIME_FIXTURES_ROOT} / "controller_basic.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
     const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     ExecutionOptions options;
@@ -974,7 +979,7 @@ TEST(ExecutionTest, ControllerAcceptsExitRequestBeforeCallbackRegistration)
     EXPECT_EQ(execution.result().exit_code, 0);
 }
 
-TEST(ExecutionTest, ControllerReadImportResumesWithCountAndGuestButtonData)
+TEST(ExecutionTest, WhenControllerReadResumes_ThenReturnsCountAndGuestButtonData)
 {
     ServicePrxFixture program("sceCtrl", {0x1F803938});
     program.argument(0, 0x08800180);
@@ -990,7 +995,7 @@ TEST(ExecutionTest, ControllerReadImportResumesWithCountAndGuestButtonData)
     EXPECT_EQ(execution.result().exit_code, 0x4001);
 }
 
-TEST(ExecutionTest, IncrementalExecutionYieldsEveryIdleVblankAndPreservesDelayResultAndBudget)
+TEST(ExecutionTest, GivenDelayedGuest_WhenExecutionAdvances_ThenYieldsEveryIdleVblankAndPreservesResultAndBudget)
 {
     ServicePrxFixture program("ThreadManForUser", {0xCEADEB47});
     program.argument(0, 70'000);
@@ -1017,7 +1022,7 @@ TEST(ExecutionTest, IncrementalExecutionYieldsEveryIdleVblankAndPreservesDelayRe
     EXPECT_EQ(headless.exit_code, execution.result().exit_code);
 }
 
-TEST(ExecutionTest, RunningGuestYieldsAtVblankWithMaskedInterruptsAndKeepsOverallBudget)
+TEST(ExecutionTest, GivenRunningGuestWithMaskedInterrupts_WhenExecutionAdvances_ThenYieldsAtVblankAndKeepsOverallBudget)
 {
     ServicePrxFixture program("Kernel_Library", {0x092968F4});
     program.call(0);                 // Mask interrupts before the loop.
@@ -1036,7 +1041,7 @@ TEST(ExecutionTest, RunningGuestYieldsAtVblankWithMaskedInterruptsAndKeepsOveral
     EXPECT_EQ(execution.guest_time(), options.max_instructions);
 }
 
-TEST(ExecutionTest, TerminationBetweenVblanksCapturesActiveContentsWithoutActivatingPendingSelection)
+TEST(ExecutionTest, GivenPendingFramebuffer_WhenGuestTerminatesBetweenVblanks_ThenCapturesActiveContents)
 {
     for (const unsigned sync : {0, 1})
     {
@@ -1060,7 +1065,7 @@ TEST(ExecutionTest, TerminationBetweenVblanksCapturesActiveContentsWithoutActiva
     }
 }
 
-TEST(ExecutionTest, CapturedConsoleOutputRemainsAvailableBeforeGuestTermination)
+TEST(ExecutionTest, WhenGuestWritesBeforeTermination_ThenCapturedConsoleOutputIsAvailable)
 {
     ServicePrxFixture program("IoFileMgrForUser", {0x42EC03AC});
     program.fixture.name(0x280, "hello");

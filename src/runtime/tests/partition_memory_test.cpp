@@ -27,7 +27,7 @@ TEST(PartitionMemoryTest, LowAndHighAllocationsShareCapacityAndFailuresPreserveI
     EXPECT_THROW(partitions.allocate({2, 1, 1}), std::runtime_error);
 }
 
-TEST(PartitionMemoryTest, InvalidFreesAndAllocationSizesLeaveLiveBlocksIntact)
+TEST(PartitionMemoryTest, GivenLiveBlocks_WhenFreeOrAllocationSizeIsInvalid_ThenPreservesBlocks)
 {
     Memory memory(GuestAddress{0x1000}, 1280);
     std::uint32_t next_id{1};

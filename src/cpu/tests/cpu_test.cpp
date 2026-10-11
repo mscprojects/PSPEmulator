@@ -451,7 +451,7 @@ TEST(CpuTest, PartialWordFaultsPreserveRegistersMemoryAndPendingControlFlow)
     }
 }
 
-TEST(CpuTest, StoreConditionalFailsWithoutLoadLinkedAndDoesNotWriteMemory)
+TEST(CpuTest, GivenNoLoadLinked_WhenStoreConditionalExecutes_ThenFailsWithoutWritingMemory)
 {
     Memory memory(GuestAddress{kProgramBase}, 128);
     load_program(memory, {0xE1090000, 0xE10A0004}); // sc $t1, 0($t0); sc $t2, 4($t0)
@@ -706,7 +706,7 @@ TEST(CpuTest, ExecutesEveryIntegerBranchVariant)
     }
 }
 
-TEST(CpuTest, BranchConditionIsEvaluatedBeforeDelaySlot)
+TEST(CpuTest, WhenBranchExecutes_ThenEvaluatesConditionBeforeDelaySlot)
 {
     Memory memory(GuestAddress{kProgramBase}, 32);
     load_program(memory, {
@@ -821,7 +821,7 @@ TEST(CpuTest, JumpUsesUpperBitsOfPcPlusFour)
     EXPECT_EQ(state.registers[9], 2U);
 }
 
-TEST(CpuTest, UntakenLikelyBranchDoesNotExecuteInvalidDelaySlot)
+TEST(CpuTest, GivenInvalidDelaySlot_WhenLikelyBranchIsUntaken_ThenSkipsDelaySlot)
 {
     Memory memory(GuestAddress{kProgramBase}, 16);
     load_program(memory, {
@@ -838,7 +838,7 @@ TEST(CpuTest, UntakenLikelyBranchDoesNotExecuteInvalidDelaySlot)
     EXPECT_EQ(state.program_counter.value_of(), kProgramBase + 12);
 }
 
-TEST(CpuTest, FailedDelaySlotPreservesPendingBranchForRetry)
+TEST(CpuTest, GivenPendingBranch_WhenDelaySlotFaults_ThenPreservesBranchForRetry)
 {
     Memory memory(GuestAddress{kProgramBase}, 20);
     load_program(memory, {0x10000002, 0xFFFFFFFF, 0xFFFFFFFF, 0x24080007});
@@ -858,7 +858,7 @@ TEST(CpuTest, FailedDelaySlotPreservesPendingBranchForRetry)
     EXPECT_EQ(state.registers[8], 7U);
 }
 
-TEST(CpuTest, MisalignedRegisterJumpFaultsAfterExecutingDelaySlot)
+TEST(CpuTest, GivenMisalignedRegisterJump_WhenExecuted_ThenFaultsAfterDelaySlot)
 {
     Memory memory(GuestAddress{kProgramBase}, 24);
     load_program(memory, {

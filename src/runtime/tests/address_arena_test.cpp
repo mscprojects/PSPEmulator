@@ -65,7 +65,7 @@ TEST(AddressArenaTest, AllocationSkipsHolesTooSmallForTheAlignedRequest)
     }
 }
 
-TEST(AddressArenaTest, FreeingRangesInAnyOrderRecoversOneContiguousRange)
+TEST(AddressArenaTest, WhenRangesAreFreedInAnyOrder_ThenRecoversOneContiguousRange)
 {
     std::array<unsigned, 4> order{0, 1, 2, 3};
     do
@@ -92,7 +92,7 @@ TEST(AddressArenaTest, FreeingRangesInAnyOrderRecoversOneContiguousRange)
     } while (std::next_permutation(order.begin(), order.end()));
 }
 
-TEST(AddressArenaTest, RepeatedOrOverlappingFreesAreRejectedWithoutChanges)
+TEST(AddressArenaTest, WhenFreeIsRepeatedOrOverlapping_ThenRejectsWithoutChanges)
 {
     AddressArena arena(0x1000, 0x1400);
     const auto first = arena.allocate(1, AllocationDirection::Low);
@@ -109,7 +109,7 @@ TEST(AddressArenaTest, RepeatedOrOverlappingFreesAreRejectedWithoutChanges)
     EXPECT_EQ(arena.largest_free_size(), 1024U);
 }
 
-TEST(AddressArenaTest, InvalidSizesLeaveFreeSpaceUnchanged)
+TEST(AddressArenaTest, WhenAllocationSizeIsInvalid_ThenFreeSpaceIsUnchanged)
 {
     AddressArena arena(0x1000, 0x1200);
     for (const auto direction : {AllocationDirection::Low, AllocationDirection::High})

@@ -28,7 +28,7 @@ TEST(GuestStructuresTest, ThreadInfoUsesPspFieldOffsetsAndLittleEndianAddresses)
     EXPECT_EQ(memory.read_u32(GuestAddress{80}), 0xFFFFFFFFU);
 }
 
-TEST(GuestStructuresTest, InvalidOutputBufferDoesNotReceiveAPartialStructure)
+TEST(GuestStructuresTest, GivenInvalidOutputBuffer_WhenWritingStructure_ThenNoPartialWriteOccurs)
 {
     Memory memory(GuestAddress{0}, 103);
     const Payload original(103, 0xA5);

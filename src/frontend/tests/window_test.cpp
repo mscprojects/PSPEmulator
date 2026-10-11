@@ -5,11 +5,14 @@
 
 #include <gtest/gtest.h>
 
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 
 namespace psp::frontend
 {
+
+namespace fs = std::filesystem;
 
 namespace
 {
@@ -35,9 +38,9 @@ Uint32 close_after_delay(void *, SDL_TimerID, Uint32)
 
 } // namespace
 
-TEST(WindowTest, RendersGuestPixelsWithNearestScalingAndPreservesAspectRatioAfterResize)
+TEST(WindowTest, GivenGuestPixels_WhenWindowResizes_ThenPreservesNearestScalingAndAspectRatio)
 {
-    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/screen_hello_world.prx", std::ios::binary);
+    std::ifstream input(fs::path{PSPEMU_RUNTIME_FIXTURES_ROOT} / "screen_hello_world.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
     const Payload bytes{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     Execution execution(read_prx(bytes));
@@ -90,7 +93,7 @@ TEST(WindowTest, RendersGuestPixelsWithNearestScalingAndPreservesAspectRatioAfte
     check_pixels(960, 208);
 }
 
-TEST(WindowTest, EscapeCloseAndQuitEventsEndTheFrontend)
+TEST(WindowTest, WhenEscapeCloseOrQuitReceived_ThenFrontendStops)
 {
     for (const auto type : {SDL_EVENT_KEY_DOWN, SDL_EVENT_WINDOW_CLOSE_REQUESTED, SDL_EVENT_QUIT})
     {
@@ -103,7 +106,7 @@ TEST(WindowTest, EscapeCloseAndQuitEventsEndTheFrontend)
     }
 }
 
-TEST(WindowTest, FinalFrameStaysOpenUntilEscapeAndKeepsGuestExitStatus)
+TEST(WindowTest, WhenGuestFinishes_ThenWindowWaitsForEscapeAndKeepsGuestExitStatus)
 {
     test::PrxFixture fixture;
     fixture.word(0x104, 0x03E00008); // jr $ra after loading v0 = 7
@@ -118,7 +121,7 @@ TEST(WindowTest, FinalFrameStaysOpenUntilEscapeAndKeepsGuestExitStatus)
     EXPECT_EQ(execution.result().instructions_executed, 3U);
 }
 
-TEST(WindowTest, EscapeDuringActiveExecutionStopsBeforeTheInstructionBudget)
+TEST(WindowTest, GivenActiveGuest_WhenEscapeReceived_ThenStopsBeforeInstructionBudget)
 {
     test::PrxFixture fixture;
     fixture.word(0x100, 0x1000FFFF); // Infinite guest branch and nop delay slot.
@@ -132,7 +135,7 @@ TEST(WindowTest, EscapeDuringActiveExecutionStopsBeforeTheInstructionBudget)
     EXPECT_THROW(execution.result(), std::logic_error);
 }
 
-TEST(WindowTest, KeyboardButtonsAnalogOppositesReleaseAndFocusLoss)
+TEST(WindowTest, WhenKeyboardInputChanges_ThenUpdatesButtonsAndAnalogAndResetsOnFocusLoss)
 {
     Window window;
     ASSERT_TRUE(window.poll());
@@ -175,7 +178,7 @@ TEST(WindowTest, KeyboardButtonsAnalogOppositesReleaseAndFocusLoss)
     EXPECT_EQ(window.controller(), ControllerState{});
 }
 
-TEST(WindowTest, HomeQueuesOneGuestExitRequestAndIgnoresKeyRepeat)
+TEST(WindowTest, WhenHomePressed_ThenQueuesOneGuestExitRequestAndIgnoresRepeat)
 {
     Window window;
     SDL_Event event{};
@@ -192,9 +195,9 @@ TEST(WindowTest, HomeQueuesOneGuestExitRequestAndIgnoresKeyRepeat)
     EXPECT_EQ(window.controller(), ControllerState{});
 }
 
-TEST(WindowTest, TriangleFinishesThroughGuestCallbacksAndRetainsExpectedPixelsUntilEscape)
+TEST(WindowTest, GivenTriangle_WhenHomePressed_ThenFinishesThroughCallbacksAndRetainsExpectedPixelsUntilEscape)
 {
-    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/triangle.prx", std::ios::binary);
+    std::ifstream input(fs::path{PSPEMU_RUNTIME_FIXTURES_ROOT} / "triangle.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
     const Payload bytes{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     Execution execution(read_prx(bytes));
@@ -236,9 +239,9 @@ TEST(WindowTest, TriangleFinishesThroughGuestCallbacksAndRetainsExpectedPixelsUn
     }
 }
 
-TEST(WindowTest, ControllerSampleExitsThroughHomeAndRetainsWindowUntilEscape)
+TEST(WindowTest, GivenControllerSample_WhenHomePressed_ThenGuestExitsAndWindowWaitsForEscape)
 {
-    std::ifstream input(std::string(PSPEMU_RUNTIME_FIXTURES_ROOT) + "/controller_basic.prx", std::ios::binary);
+    std::ifstream input(fs::path{PSPEMU_RUNTIME_FIXTURES_ROOT} / "controller_basic.prx", std::ios::binary);
     ASSERT_TRUE(input.is_open());
     const Payload bytes{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     ExecutionOptions options;

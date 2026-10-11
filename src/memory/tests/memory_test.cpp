@@ -73,7 +73,7 @@ TEST(MemoryTest, CopiesBinaryRangesWithIndependentOwnership)
     EXPECT_THROW(memory.read_bytes(GuestAddress{104}, 1), std::out_of_range);
 }
 
-TEST(MemoryTest, ReadsIntoCallerStorageAndRejectsInvalidRangesWithoutPartialCopies)
+TEST(MemoryTest, WhenReadingIntoCallerStorage_ThenRejectsInvalidRangesWithoutPartialCopies)
 {
     Memory memory(GuestAddress{100}, 5);
     memory.write_bytes(GuestAddress{100}, Payload{0xA5, 0, 0xFF, 'x', 0});
@@ -167,7 +167,7 @@ TEST(MemoryTest, AliasesSupportByteRangesCallerStorageAndStrings)
     EXPECT_NO_THROW(memory.read_into(GuestAddress{0xFFFFFFFF}, {}));
 }
 
-TEST(MemoryTest, MappingRejectsOverlapsInvalidSourcesAndAddressWrapWithoutChangingData)
+TEST(MemoryTest, WhenMappingHasOverlapsInvalidSourceOrAddressWrap_ThenRejectsWithoutChangingData)
 {
     Memory memory(GuestAddress{100}, 8);
     memory.write_u32(GuestAddress{100}, 0x12345678);
@@ -217,7 +217,7 @@ TEST(MemoryTest, AccessesCannotCrossRegionsOrAliasBoundaries)
     EXPECT_THROW(memory.read_u8(GuestAddress{208}), std::out_of_range);
 }
 
-TEST(MemoryTest, MemoryCopiesOwnTheirBytesAndKeepAliasesWithinTheCopy)
+TEST(MemoryTest, WhenMemoryIsCopied_ThenOwnsBytesAndKeepsAliasesWithinCopy)
 {
     Memory original(GuestAddress{0x08800000}, 4);
     original.map_region(GuestAddress{0x04000000}, 4);

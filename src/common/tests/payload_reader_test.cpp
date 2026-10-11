@@ -41,7 +41,7 @@ TEST(PayloadReaderTest, ReturnsBorrowedBytesAndSupportsBoundedReaders)
     EXPECT_EQ(parent.read_u16(), 0x7856);
 }
 
-TEST(PayloadReaderTest, FailedReadsAndSeeksPreserveThePosition)
+TEST(PayloadReaderTest, WhenReadOrSeekFails_ThenPreservesPosition)
 {
     const std::array<std::uint8_t, 3> bytes{0x12, 0x34, 0x56};
     PayloadReader reader(bytes, std::endian::little);
