@@ -231,11 +231,6 @@ TEST_P(SpritePrxExecutionTest, WhenRunAtDifferentLoadAddresses_ThenEntireOutputM
         SCOPED_TRACE(base);
         ExecutionOptions options;
         options.load_address = GuestAddress{base};
-        if (std::string_view{GetParam()} == "commands/blend")
-        {
-            // This unoptimized guest fills and copies full framebuffers for every blend case.
-            options.max_instructions = 1'000'000'000;
-        }
         const auto result = execute_prx(parsed, options);
         EXPECT_EQ(result.exit_code, 0);
         EXPECT_EQ(result.output, expected);
@@ -245,8 +240,32 @@ TEST_P(SpritePrxExecutionTest, WhenRunAtDifferentLoadAddresses_ThenEntireOutputM
 }
 
 INSTANTIATE_TEST_SUITE_P(BundledSprites, SpritePrxExecutionTest,
-                         testing::Values("filtering/precisionnearest2d", "filtering/precisionlinear2d",
-                                         "commands/blend"));
+                         testing::Values("filtering/precisionnearest2d", "filtering/precisionlinear2d"));
+
+TEST(ExecutionTest, GivenBundledBlend_WhenRunAtDifferentLoadAddresses_ThenEntireOutputMatchesHardware)
+{
+    const auto directory = fs::path{PSPAUTOTESTS_ROOT} / "tests" / "gpu" / "commands";
+    std::ifstream input(directory / "blend.prx", std::ios::binary);
+    std::ifstream expected_file(directory / "blend.expected", std::ios::binary);
+    ASSERT_TRUE(input.is_open());
+    ASSERT_TRUE(expected_file.is_open());
+    const Payload payload{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    const std::string expected{std::istreambuf_iterator<char>(expected_file), std::istreambuf_iterator<char>()};
+    const auto parsed = read_prx(payload);
+    for (const std::uint32_t base : {0x08800000U, 0x08900000U})
+    {
+        SCOPED_TRACE(base);
+        ExecutionOptions options;
+        options.load_address = GuestAddress{base};
+        // This unoptimized guest fills and copies full framebuffers for every blend case.
+        options.max_instructions = 1'000'000'000;
+        const auto result = execute_prx(parsed, options);
+        EXPECT_EQ(result.exit_code, 0);
+        EXPECT_EQ(result.output, expected);
+        EXPECT_GT(result.instructions_executed, 0U);
+        EXPECT_LE(result.instructions_executed, options.max_instructions);
+    }
+}
 
 TEST(ExecutionTest, GivenHelloWorld_WhenRunAtDifferentLoadAddresses_ThenPrintsAndExits)
 {
