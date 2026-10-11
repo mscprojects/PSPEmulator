@@ -42,7 +42,7 @@ just test
 ```
 
 - Update the checksums above when replacing a binary.
-- Interactive fixtures can also be checked with `./build/pspemu <fixture> --window`.
+- Interactive fixtures can also be checked with `just run release <fixture> --window`.
 
 ## Licenses
 

@@ -1,40 +1,38 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
+set positional-arguments
 
 pspdev_version := "v20261001"
 pspdev_directory := env("HOME") / ".local/opt/pspdev" / pspdev_version
 
 default: build
 
-configure:
-    cmake -S . -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug
+configure preset="debug":
+    cmake --preset "$1"
 
-build: configure
-    cmake --build build --parallel "$(nproc)"
+build preset="debug": (configure preset)
+    cmake --build --preset "$1" --parallel "$(nproc)"
 
 # Run tests in separate processes, one worker per available CPU.
-test: build
-    ctest --test-dir build --parallel "$(nproc)" --output-on-failure --no-tests=error
+test preset="debug": (build preset)
+    ctest --preset "$1" --parallel "$(nproc)"
 
-# Strict floating-point behavior must also hold after optimization.
-release-test:
-    cmake -S . -B build-release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
-    cmake --build build-release --parallel "$(nproc)"
-    ctest --test-dir build-release --parallel "$(nproc)" --output-on-failure --no-tests=error
+# Select a preset explicitly, then pass the PRX path and any emulator arguments.
+run preset +arguments: (build preset)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    preset="$1"
+    shift
+    exec "./build/$preset/pspemu" "$@"
 
 format: configure
-    cmake --build build --target format --parallel "$(nproc)"
+    cmake --build --preset debug --target format --parallel "$(nproc)"
 
 format-check: configure
-    cmake --build build --target format-check --parallel "$(nproc)"
+    cmake --build --preset debug --target format-check --parallel "$(nproc)"
 
-tidy:
-    cmake -S . -B build-tidy -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_CLANG_TIDY=clang-tidy
-    cmake --build build-tidy --clean-first --parallel "$(nproc)"
+tidy: (build "tidy")
 
-sanitizers:
-    cmake -S . -B build-san -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPSPEMU_ENABLE_SANITIZERS=ON
-    cmake --build build-san --parallel "$(nproc)"
-    ctest --test-dir build-san --parallel "$(nproc)" --output-on-failure --no-tests=error
+sanitizers: (test "sanitizers")
 
 # Install the pinned Ubuntu x86_64 release without changing the shell environment.
 setup-pspdev:
@@ -83,4 +81,4 @@ homebrew: setup-pspdev
     cp -p homebrew/triangle/main.c homebrew/triangle/Makefile "$output/"
     make -C "$output" --jobs "$(nproc)"
 
-ci: format-check test release-test tidy sanitizers
+ci: format-check (test "debug") (test "release") tidy sanitizers

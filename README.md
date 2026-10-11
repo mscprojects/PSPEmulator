@@ -19,34 +19,44 @@ Requirements:
 - Git submodules (`git submodule update --init --recursive`) and Git LFS for the homebrew fixtures (`git lfs pull`).
 
 ```sh
-just build   # Debug build (-O1) in build/
-just test    # all tests, including hardware-output comparisons
-just ci      # format check, Debug and Release tests, clang-tidy, sanitizers
+just build          # Debug build (-O1)
+just build release  # Release build
+just test           # Debug tests, including hardware-output comparisons
+just test release   # the same tests after optimization
+just ci             # format check, Debug and Release tests, clang-tidy, sanitizers
 ```
 
-Without `just`:
+- `configure`, `build`, and `test` accept a preset and default to `debug`.
+- Available presets: `debug`, `release`, `tidy`, and `sanitizers`, defined in [CMakePresets.json](/CMakePresets.json).
+- Each preset uses its own directory under `build/<preset>`.
+- `build` configures automatically; `test` and `run` build automatically.
+
+Without `just`, select the same CMake presets explicitly:
 
 ```sh
-cmake -S . -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --parallel "$(nproc)"
+cmake --preset release
+cmake --build --preset release --parallel "$(nproc)"
+ctest --preset release --parallel "$(nproc)"
 ```
 
 Other recipes:
 
 - `just format` / `just format-check`: clang-format over `src/`.
-- `just tidy`: clean clang-tidy build in `build-tidy`.
-- `just release-test`, `just sanitizers`: the Release and address/UB-sanitizer parts of `ci`.
+- `just tidy`: clean clang-tidy build using the `tidy` preset.
+- `just sanitizers`: build and test with address and undefined behavior sanitizers.
 
 ## Run a PRX
 
 ```sh
-./build/pspemu third_party/pspautotests/tests/cpu/cpu_alu/cpu_alu.prx
-./build/pspemu third_party/pspautotests/tests/gpu/filtering/precisionnearest2d.prx
-./build/pspemu third_party/pspautotests/tests/gpu/filtering/precisionlinear2d.prx
-./build/pspemu src/runtime/tests/fixtures/triangle.prx --window
-./build/pspemu program.prx --max-instructions 1000000
+just run release src/runtime/tests/fixtures/triangle.prx --window
+just run debug src/runtime/tests/fixtures/controller_basic.prx --window --max-instructions 500000000
+just run release third_party/pspautotests/tests/cpu/cpu_alu/cpu_alu.prx
+just run release third_party/pspautotests/tests/gpu/filtering/precisionnearest2d.prx
+just run release third_party/pspautotests/tests/gpu/filtering/precisionlinear2d.prx
+just run debug program.prx --max-instructions 1000000
 ```
 
+- `run` requires a preset followed by a PRX path; remaining arguments go to the emulator. Relative PRX paths are resolved from the repository root.
 - Headless by default. Guest output goes to stdout, including output captured before a fault.
 - Faults and budget exhaustion report the guest PC and instruction on stderr. A guest that only host input could wake also fails. Both exit nonzero.
 - `--max-instructions` defaults to 50 million. GE commands have a separate limit of the same size.
